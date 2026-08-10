@@ -1,0 +1,17 @@
+ziven-post-comment:
+  forum:
+    post:
+      reply_link: Reply
+      view_more_replies: "View {count, plural, one {# more reply} other {# more replies}}"
+      collapse_replies: Collapse
+      composer_placeholder: Write a reply…
+      composer_submit: Post Reply
+    settings:
+      notify_post_commented_label: "Someone replies to my post"
+  admin:
+    settings:
+      heading: "Ziven Post Comment"
+      description: "Single-level nested replies for top-level comments. Replies can themselves receive likes and mentions, but cannot be replied to again (single-level only)."
+  lib:
+    notification:
+      post_commented_text: "{username} replied to your post"

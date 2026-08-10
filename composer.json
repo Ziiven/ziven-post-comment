@@ -1,0 +1,43 @@
+{
+  "name": "ziiven/ziven-post-comment",
+  "description": "Single-level nested replies for Flarum 2.0 with reply notifications, collapse animation, and lazy load",
+  "type": "flarum-extension",
+  "keywords": [
+    "flarum",
+    "extension",
+    "nested",
+    "reply",
+    "comment",
+    "thread"
+  ],
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Ziven",
+      "email": "ziven@ziven.local"
+    }
+  ],
+  "support": {
+    "issues": "https://github.com/Ziiven/ziven-post-comment/issues",
+    "source": "https://github.com/Ziiven/ziven-post-comment"
+  },
+  "require": {
+    "flarum/core": "^2.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Ziven\\PostComment\\": "src/"
+    }
+  },
+  "extra": {
+    "flarum-extension": {
+      "title": "Ziven Post Comment",
+      "category": "feature",
+      "icon": {
+        "name": "fas fa-comments",
+        "backgroundColor": "#1976d2",
+        "color": "#fff"
+      }
+    }
+  }
+}

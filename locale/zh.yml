@@ -1,0 +1,17 @@
+ziven-post-comment:
+  forum:
+    post:
+      reply_link: 回复
+      view_more_replies: "查看更多 {count} 条回复"
+      collapse_replies: 收起
+      composer_placeholder: 写一条回复…
+      composer_submit: 发表回复
+    settings:
+      notify_post_commented_label: "有人回复了我的帖子"
+  admin:
+    settings:
+      heading: "Ziven 楼中楼回复"
+      description: "为顶层评论启用单层楼中楼回复。回复可以点赞、被 @，但不能再被回复（单层限制）。"
+  lib:
+    notification:
+      post_commented_text: "{username} 回复了你的帖子"

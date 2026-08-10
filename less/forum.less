@@ -1,0 +1,273 @@
+// Ziven Post Comment — single-level nested replies
+//
+// Visual language:
+//   - Top-level post with replies gets a subtle accent (left border accent
+//     on each reply to imply the thread).
+//   - Replies themselves collapse: first 3 visible, the rest hidden by
+//     max-height + overflow. A max-height animation provides the "smooth
+//     expand" feel.
+//   - Light + dark theme both supported via CSS variables matching Flarum's
+//     --primary-color / --control-bg tokens.
+
+@ziven-reply-accent: #1976d2;
+@ziven-reply-accent-dark: #42a5f5;
+@ziven-reply-bg: rgba(25, 118, 210, 0.04);
+@ziven-reply-bg-dark: rgba(66, 165, 245, 0.07);
+@ziven-reply-border: rgba(25, 118, 210, 0.18);
+@ziven-reply-border-dark: rgba(66, 165, 245, 0.22);
+
+// ------------------------------------------------------------------
+// NestedReplies — outer container under each top-level comment.
+// ------------------------------------------------------------------
+.Post-nestedReplies {
+  margin-top: 12px;
+}
+
+.NestedReplies {
+  border-left: 3px solid @ziven-reply-accent;
+  background: @ziven-reply-bg;
+  border-radius: 0 6px 6px 0;
+  padding: 10px 14px;
+  transition: max-height 0.3s ease, opacity 0.2s ease;
+  overflow: hidden;
+
+  // When the thread has replies, give the parent post a subtle indicator.
+  .Post--hasReplies & {
+    border-left-color: @ziven-reply-accent;
+  }
+}
+
+[data-theme^="dark"] .NestedReplies {
+  border-left-color: @ziven-reply-accent-dark;
+  background: @ziven-reply-bg-dark;
+}
+
+// ------------------------------------------------------------------
+// NestedReplies list
+// ------------------------------------------------------------------
+.NestedReplies-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.NestedReplies-item {
+  margin: 0;
+  padding: 0;
+}
+
+// ------------------------------------------------------------------
+// NestedReply — single reply card
+// ------------------------------------------------------------------
+.NestedReply {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  background: var(--control-bg, #fff);
+  border-radius: 6px;
+  border: 1px solid var(--control-color, rgba(0, 0, 0, 0.06));
+  transition: background 0.15s ease;
+}
+
+[data-theme^="dark"] .NestedReply {
+  background: var(--control-bg, rgba(255, 255, 255, 0.04));
+  border-color: var(--control-color, rgba(255, 255, 255, 0.08));
+}
+
+.NestedReply-avatar {
+  flex: 0 0 auto;
+}
+
+.NestedReply-avatar-img {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.NestedReply-body {
+  flex: 1 1 auto;
+  min-width: 0; // allow text wrapping
+}
+
+.NestedReply-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.NestedReply-author {
+  font-weight: 600;
+  color: var(--heading-color, inherit);
+  text-decoration: none;
+}
+
+.NestedReply-time {
+  color: var(--muted-color, #6b7280);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.NestedReply-content {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-color, inherit);
+  word-wrap: break-word;
+  // Strip the default <p> margin so the reply sits tight.
+  > p:first-child { margin-top: 0; }
+  > p:last-child  { margin-bottom: 0; }
+}
+
+.NestedReply--hidden {
+  opacity: 0.55;
+  font-style: italic;
+}
+
+// ------------------------------------------------------------------
+// Controls (View N more / Collapse)
+// ------------------------------------------------------------------
+.NestedReplies-controls {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.NestedReplies-viewMore,
+.NestedReplies-collapse {
+  font-size: 13px;
+  padding: 2px 6px;
+}
+
+// ------------------------------------------------------------------
+// ReplyComposer (inline)
+// ------------------------------------------------------------------
+.NestedReplies-composer {
+  margin-top: 10px;
+}
+
+.ReplyComposer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ReplyComposer-input {
+  width: 100%;
+  resize: vertical;
+  min-height: 48px;
+  max-height: 200px;
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--control-color, rgba(0, 0, 0, 0.12));
+  background: var(--control-bg, #fff);
+  color: var(--text-color, inherit);
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
+  &:focus {
+    outline: none;
+    border-color: @ziven-reply-accent;
+    box-shadow: 0 0 0 2px rgba(25, 118, 210, 0.18);
+  }
+}
+
+[data-theme^="dark"] .ReplyComposer-input {
+  &:focus {
+    border-color: @ziven-reply-accent-dark;
+    box-shadow: 0 0 0 2px rgba(66, 165, 245, 0.22);
+  }
+}
+
+.ReplyComposer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ReplyComposer-error {
+  color: var(--danger-color, #e53e3e);
+  font-size: 13px;
+  margin-right: auto;
+}
+
+.ReplyComposer-submit {
+  font-size: 13px;
+  padding: 4px 14px;
+  background: @ziven-reply-accent;
+  color: #fff;
+  border-radius: 4px;
+  border: none;
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+
+  &:hover:not(:disabled) {
+    background: darken(@ziven-reply-accent, 8%);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+[data-theme^="dark"] .ReplyComposer-submit {
+  background: @ziven-reply-accent-dark;
+  &:hover:not(:disabled) {
+    background: lighten(@ziven-reply-accent-dark, 6%);
+  }
+}
+
+// ------------------------------------------------------------------
+// Action button (the "Reply" link on each top-level post)
+// ------------------------------------------------------------------
+.Post-nestedReplyBtn {
+  color: @ziven-reply-accent;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+[data-theme^="dark"] .Post-nestedReplyBtn {
+  color: @ziven-reply-accent-dark;
+}
+
+// ------------------------------------------------------------------
+// Loading indicator
+// ------------------------------------------------------------------
+.NestedReplies-loading {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+// ------------------------------------------------------------------
+// Mobile / responsive
+// ------------------------------------------------------------------
+@media @phone {
+  .NestedReplies {
+    padding: 8px 10px;
+  }
+
+  .NestedReply {
+    padding: 6px 8px;
+  }
+
+  .NestedReply-avatar-img {
+    width: 24px;
+    height: 24px;
+  }
+
+  .NestedReply-content {
+    font-size: 13px;
+  }
+}
