@@ -20,7 +20,7 @@ cd /Applications/MAMP/htdocs/Flarum
 composer require ziiven/ziven-post-comment
 php flarum migrate
 php flarum cache:clear
-php flarum extension:enable ziven-post-comment
+php flarum extension:enable ziiven-ziven-post-comment
 ```
 
 ## Build (front-end)

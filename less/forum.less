@@ -64,6 +64,25 @@
   max-height: 9999px;
 }
 
+// When the wrapper has the expanded class, swap the "View N more" /
+// "Collapse" buttons visually. The buttons are still in the DOM (the
+// component renders both, gated by `this.expanded`); the click handler
+// on each is only active when the corresponding button is meant to be
+// visible. We hide the inactive one via display:none so users only see
+// the action that's currently valid. This avoids needing a mithril
+// re-render to swap the buttons (vendor Flarum 2.0's SubtreeRetainer
+// blocks redraws on this.expanded changes — see NestedReplies.jsx
+// comments for details).
+.NestedReplies-collapse {
+  display: none !important;
+}
+.NestedReplies--expanded .NestedReplies-collapse {
+  display: inline-flex !important;
+}
+.NestedReplies--expanded .NestedReplies-viewMore {
+  display: none !important;
+}
+
 .NestedReplies-item {
   margin: 0;
   padding: 0;
