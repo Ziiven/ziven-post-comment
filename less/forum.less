@@ -52,16 +52,30 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  // Collapse animation: the list shows the first ~3 replies (≈240px) by
-  // default; "View N more" expands to 9999px via .NestedReplies--expanded.
-  // The transition gives a smooth expand/collapse.
-  max-height: 240px;
-  overflow: hidden;
+  // v0.1.0c: items beyond VISIBLE_THRESHOLD are individually hidden
+  // via `.NestedReplies-item--hidden { display: none; }` (set in
+  // `view()`), so the list itself no longer needs a max-height clip.
+  // The `--expanded` rule below is kept as a no-op for compatibility
+  // with any cached state — items are revealed by their own
+  // `.NestedReplies-item--hidden` rule flipping to `display: block`.
   transition: max-height 0.3s ease;
 }
 
 .NestedReplies--expanded .NestedReplies-list {
   max-height: 9999px;
+}
+
+// v0.1.0c: per-item visibility is driven by the `--hidden` class
+// (assigned in NestedReplies.jsx's view() for items at
+// `idx >= VISIBLE_THRESHOLD` when not expanded). The wrapper's
+// `--expanded` class flips those items back to `display: block`,
+// bypassing vendor Flarum 2.0's SubtreeRetainer (which blocks mithril
+// re-renders of this subtree on `this.expanded` change).
+.NestedReplies-item--hidden {
+  display: none;
+}
+.NestedReplies--expanded .NestedReplies-item--hidden {
+  display: block;
 }
 
 // When the wrapper has the expanded class, swap the "View N more" /

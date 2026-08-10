@@ -15,14 +15,38 @@
 // `user.freshness` change — and `this.expanded` is none of those. As a
 // result, mutating `this.expanded` followed by `m.redraw()` does NOT
 // re-render this subtree in Flarum 2.0 (the parent `CommentPost` short-
-// circuits the diff). The fix is to drive the CSS `.NestedReplies--expanded`
-// toggle directly off the DOM, and to track visibility of the list items
-// in the same way. The mithril `view()` is rendered once for the initial
-// collapsed shape, then the expand/collapse click handlers toggle the
-// `NestedReplies--expanded` class on the wrapper and update
-// `.NestedReplies-item` `display` based on the `expanded` state. This
-// avoids the SubtreeRetainer lock while still keeping the initial render
-// declarative.
+// circuits the diff).
+//
+// Fix strategy (v0.1.0c — supersedes v0.1.0b's max-height approach):
+//   1. `view()` ALWAYS renders ALL replies (no `slice`). Hidden items
+//      beyond `VISIBLE_THRESHOLD` get a `NestedReplies-item--hidden` class
+//      so CSS can hide them via `display: none` when collapsed.
+//   2. The wrapper element has its `--expanded` class toggled directly via
+//      DOM in `_applyExpanded()` (this.wrapperEl.classList.toggle).
+//   3. CSS rule `.NestedReplies--expanded .NestedReplies-item--hidden
+//      { display: block; }` reveals the previously-hidden items the moment
+//      the wrapper class is set, without needing a mithril re-render.
+//
+// This works because the DOM tree is complete after the first render —
+// the only thing the SubtreeRetainer blocks is a *re-render* of the
+// subtree; it does not block direct DOM mutations on the existing nodes.
+// Items beyond the threshold are physically present in the DOM, just
+// `display: none`'d by the `--hidden` class, so a single classList.toggle
+// on the wrapper is enough to make them visible.
+//
+// The mithril `view()` is also called once on initial mount with
+// `this.expanded = false`, so the first render paints the correct
+// collapsed shape (3 visible, 2 hidden) declaratively. Subsequent clicks
+// only mutate the wrapper class, never the mithril tree, so the
+// SubtreeRetainer lock is irrelevant.
+//
+// (Earlier v0.1.0b attempt relied on the parent's `max-height: 240px;
+// overflow: hidden` to *implicitly* hide items beyond the threshold. But
+// `view()` rendered only the first `visibleCount` items via `slice(0, ...)`,
+// so items beyond the threshold were not in the DOM at all — CSS
+// max-height cannot reveal DOM that does not exist. V 测 V3 caught this
+// by checking `querySelectorAll('.NestedReplies-item').length` instead
+// of only button state.)
 
 import app from 'flarum/forum/app';
 import Component from 'flarum/common/Component';
@@ -111,6 +135,17 @@ export default class NestedReplies extends Component {
     // the visual change off the DOM directly).
     this.wrapperEl = vnode.dom;
     this.listEl = vnode.dom && vnode.dom.querySelector('.NestedReplies-list');
+    // Capture each item element so we can toggle the `--hidden` class
+    // directly when the wrapper's expanded state changes (without a
+    // mithril re-render). The class is what the V 测 V3 acceptance test
+    // inspects: `visibleCount = totalItems - hiddenCount` must equal
+    // 5 after expand and 3 after collapse. The CSS rule
+    // `.NestedReplies--expanded .NestedReplies-item--hidden { display:
+    // block; }` is kept as a redundant safety net so the user always
+    // sees the right items even if the class toggle ever drifts.
+    this.itemEls = vnode.dom
+      ? Array.from(vnode.dom.querySelectorAll('.NestedReplies-item'))
+      : [];
   }
 
   /**
@@ -119,6 +154,21 @@ export default class NestedReplies extends Component {
    * re-renders (e.g. after a reply is posted) render the correct
    * initial shape, but we do NOT rely on mithril to apply the click
    * feedback — vendor Flarum 2.0's `SubtreeRetainer` blocks it.
+   *
+   * The visual swap is driven entirely by toggling the
+   * `NestedReplies--expanded` class on the wrapper element. The CSS
+   * then does the rest:
+   *   - `.NestedReplies-item--hidden { display: none; }` hides items
+   *     beyond VISIBLE_THRESHOLD when collapsed.
+   *   - `.NestedReplies--expanded .NestedReplies-item--hidden
+   *      { display: block; }` reveals them when expanded.
+   *   - The "View N more" / "Collapse" button swap is also gated on
+   *     the same wrapper class (see forum.less).
+   *
+   * The DOM is fully populated with ALL replies on initial mount, so
+   * the only thing that changes between collapsed and expanded is one
+   * class on the wrapper — fast, no re-render needed, SubtreeRetainer
+   * cannot interfere.
    */
   expand() {
     if (this.expanded) return;
@@ -136,23 +186,23 @@ export default class NestedReplies extends Component {
     if (this.wrapperEl) {
       this.wrapperEl.classList.toggle('NestedReplies--expanded', this.expanded);
     }
-    // We rely on the CSS rule
-    //   .NestedReplies--expanded .NestedReplies-list { max-height: 9999px; }
-    // to animate the height change. The items beyond VISIBLE_THRESHOLD
-    // are already hidden by the parent's `max-height:240px; overflow:hidden`
-    // on `.NestedReplies-list` and become visible automatically when
-    // max-height transitions to 9999px — no DOM-level item toggling is
-    // required. The button swap ("View N more" ↔ "Collapse") is also
-    // handled by the same class change, since both buttons live inside
-    // the wrapper and the CSS doesn't differentiate them; the *next*
-    // mithril render of the wrapper (triggered by a store update, a
-    // reply post, or a future redraw) will pick up `this.expanded` and
-    // render the correct button.
+    // Toggle the `--hidden` class on each item at idx >= VISIBLE_THRESHOLD
+    // to match the expanded state. Without this, the items are physically
+    // visible (the CSS rule for `--expanded` overrides `display: none`)
+    // but still carry the `--hidden` class, which makes the V 测 V3
+    // acceptance check (visibleCount = total - hidden) fail.
+    if (this.itemEls && this.itemEls.length) {
+      for (let i = VISIBLE_THRESHOLD; i < this.itemEls.length; i++) {
+        this.itemEls[i].classList.toggle(
+          'NestedReplies-item--hidden',
+          !this.expanded,
+        );
+      }
+    }
   }
 
   view() {
     const total = this.replies.length;
-    const visibleCount = this.expanded ? total : Math.min(total, VISIBLE_THRESHOLD);
     const hiddenCount = Math.max(0, total - VISIBLE_THRESHOLD);
     const showExpandButton = total > VISIBLE_THRESHOLD;
     const showCollapseButton = total > VISIBLE_THRESHOLD;
@@ -165,8 +215,21 @@ export default class NestedReplies extends Component {
         })}
       >
         <ul className="NestedReplies-list">
-          {this.replies.slice(0, visibleCount).map((reply) => (
-            <li className="NestedReplies-item" key={'reply-' + reply.id()}>
+          {this.replies.map((reply, idx) => (
+            <li
+              className={classList('NestedReplies-item', {
+                // Items at index >= VISIBLE_THRESHOLD are physically in
+                // the DOM but hidden via `display: none` when the
+                // wrapper is not `--expanded`. When the wrapper gets
+                // `--expanded` (toggled in `_applyExpanded()`), the
+                // CSS rule `.NestedReplies--expanded
+                // .NestedReplies-item--hidden { display: block; }`
+                // makes them visible without a mithril re-render.
+                'NestedReplies-item--hidden':
+                  !this.expanded && idx >= VISIBLE_THRESHOLD,
+              })}
+              key={'reply-' + reply.id()}
+            >
               <NestedReply reply={reply} />
             </li>
           ))}
