@@ -17,7 +17,7 @@ A Flarum 2.0 extension that adds **single-level nested replies** (楼中楼) to 
 
 ```bash
 cd /Applications/MAMP/htdocs/Flarum
-composer require ziven/ziven-post-comment
+composer require ziiven/ziven-post-comment
 php flarum migrate
 php flarum cache:clear
 php flarum extension:enable ziven-post-comment

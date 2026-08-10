@@ -52,6 +52,16 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  // Collapse animation: the list shows the first ~3 replies (≈240px) by
+  // default; "View N more" expands to 9999px via .NestedReplies--expanded.
+  // The transition gives a smooth expand/collapse.
+  max-height: 240px;
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+
+.NestedReplies--expanded .NestedReplies-list {
+  max-height: 9999px;
 }
 
 .NestedReplies-item {

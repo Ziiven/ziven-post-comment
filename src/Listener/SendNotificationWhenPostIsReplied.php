@@ -1,7 +1,7 @@
 <?php
 
 /*
- * This file is part of ziven/ziven-post-comment.
+ * This file is part of ziiven/ziven-post-comment.
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -46,6 +46,13 @@ class SendNotificationWhenPostIsReplied
         $parent = Post::query()->find($parentPostId);
 
         if (! $parent || ! $parent->user) {
+            return;
+        }
+
+        // A1 single-level: only notify on top-level parents. A reply-of-a-reply
+        // is rejected at the API layer (RejectNestedReply listener), so this
+        // check is a defense-in-depth in case the API guard is bypassed.
+        if ($parent->parent_post_id !== null) {
             return;
         }
 

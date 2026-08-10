@@ -1,5 +1,11 @@
 // NestedReply — renders a single nested reply (a child CommentPost shown
 // in compact form, with a blue left border + smaller avatar).
+//
+// `m` is the global mithril (provided by Flarum core, configured via
+// flarum-webpack-config's babel JSX pragma). We use `m.trust()` to render
+// server-produced HTML — see https://mithril.js.org/trust.html. The
+// previous version used React's `dangerouslySetInnerHTML` which is a no-op
+// under the mithril JSX pragma and caused empty reply content.
 
 import app from 'flarum/forum/app';
 import Component from 'flarum/common/Component';
@@ -43,14 +49,9 @@ export default class NestedReply extends Component {
             </a>
           </header>
 
-          <div
-            className="NestedReply-content"
-            // The post body has been rendered server-side and stored in
-            // contentHtml; trust it (Flarum does the same for the main
-            // post stream).
-            // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{ __html: reply.contentHtml() || '' }}
-          />
+          <div className="NestedReply-content">
+            {m.trust(reply.contentHtml() || '')}
+          </div>
         </div>
       </article>
     );
