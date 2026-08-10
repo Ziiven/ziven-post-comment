@@ -1,6 +1,15 @@
 // ReplyComposer — a small inline textarea + submit button for writing a
 // nested reply. Posts a new post with parentPost relationship pointing
 // back to the parent comment.
+//
+// v0.1.0d: NestedReplies is now responsible for the visible/hidden
+// toggle of this component (it wraps the composer in a container and
+// toggles the container's `display` style directly via the
+// `_applyComposer()` helper — see SOP 207 / 208 for why we don't
+// rely on mithril re-renders here). The component itself does NOT
+// take a `visible` prop; mounting it = visible. Hiding is the
+// parent's job. This keeps the composer's internal state (the
+// textarea content) cleanly tied to its lifetime.
 
 import app from 'flarum/forum/app';
 import Component from 'flarum/common/Component';

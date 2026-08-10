@@ -2,6 +2,9 @@ ziven-post-comment:
   forum:
     post:
       reply_link: 回复
+      # v0.1.0d: NestedReplies 内的 "Reply" 按钮 (跟 Post 级别的
+      # `reply_link` 区分, 功能相同都是 toggle 内联 composer)
+      reply: 回复
       view_more_replies: "查看更多 {count} 条回复"
       collapse_replies: 收起
       composer_placeholder: 写一条回复…

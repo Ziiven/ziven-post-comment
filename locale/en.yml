@@ -2,6 +2,11 @@ ziven-post-comment:
   forum:
     post:
       reply_link: Reply
+      # v0.1.0d: separate key for the per-post "Reply" button inside
+      # NestedReplies (it toggles the inline composer, while
+      # `reply_link` is the link on the parent post that scrolls +
+      # triggers the same toggle).
+      reply: Reply
       view_more_replies: "View {count, plural, one {# more reply} other {# more replies}}"
       collapse_replies: Collapse
       composer_placeholder: Write a reply…

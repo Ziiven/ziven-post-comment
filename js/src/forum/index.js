@@ -40,14 +40,25 @@ app.initializers.add('ziven-post-comment', () => {
   // Render the NestedReplies block under each top-level comment.
   // We use `override` here because `content()` returns a Mithril.Children[]
   // array (not an ItemList), so the `extend(pattern)` mutator doesn't fit.
+  //
+  // v0.1.0d (辉哥亲测发现): the first post of a discussion (number=1) must
+  // NOT have a NestedReplies block. The first post IS the discussion
+  // starter, and stuffing a "Reply" / composer area underneath it is
+  // confusing — every "View N more" / composer / "Reply" affordance the
+  // extension adds belongs to *replies* of a post, but a discussion
+  // starter is a one-of-a-kind seed post whose only "reply" path is the
+  // global discussion composer (not this extension's per-post composer).
+  // Skipping number=1 here is also a defensive guard in case the backend
+  // ever starts returning first posts with `isReply=false` but `parent
+  // != null` (a likely future refactor).
   override(CommentPost.prototype, 'content', function (original) {
     const post = this.attrs.post;
     const children = original();
 
-    // Top-level posts only: append the NestedReplies block after the main
-    // post body. Reply posts themselves are leaf nodes and don't get a
-    // nested-replies section of their own.
-    if (post.isReply()) {
+    // Top-level posts only, and never the first post of a discussion.
+    // Reply posts themselves are leaf nodes; the discussion starter is
+    // the "root" — neither gets a NestedReplies block.
+    if (post.isReply() || post.number() === 1) {
       return children;
     }
 
@@ -60,12 +71,13 @@ app.initializers.add('ziven-post-comment', () => {
   });
 
   // Add a "Reply" action to each top-level post. The actual inline composer
-  // lives inside <NestedReplies> (it's always rendered, no toggle needed —
-  // user just types in the textarea under the reply list).
+  // lives inside <NestedReplies> and is toggled by the per-post "Reply"
+  // button. v0.1.0d: skip the first post of the discussion for the same
+  // reason as `content` above.
   extend(CommentPost.prototype, 'actionItems', function (items) {
     const post = this.attrs.post;
 
-    if (post.isReply() || post.isHidden()) {
+    if (post.isReply() || post.isHidden() || post.number() === 1) {
       return;
     }
 
@@ -80,9 +92,12 @@ app.initializers.add('ziven-post-comment', () => {
         className="Button Button--link Post-nestedReplyBtn"
         icon="fas fa-reply"
         onclick={() => {
-          // Scroll to the inline composer inside NestedReplies.
-          const el = this.$('.ReplyComposer-input')[0];
-          if (el) el.focus();
+          // Toggle the inline composer inside NestedReplies — scroll to
+          // it and focus the textarea. The composer is now hidden by
+          // default (v0.1.0d), so this also flips it open via the same
+          // event NestedReplies' own "Reply" button uses.
+          const $composer = this.$('.NestedReplies-replyBtn')[0];
+          if ($composer) $composer.click();
         }}
       >
         {app.translator.trans('ziven-post-comment.forum.post.reply_link')}
@@ -93,11 +108,13 @@ app.initializers.add('ziven-post-comment', () => {
 
   // Override the elementAttrs to add `Post--hasReplies` when this post has
   // nested replies, so we can show an indicator (e.g. a left border).
+  // v0.1.0d: also skip the first post — the starter post never gets the
+  // `Post--hasReplies` accent (it has no NestedReplies block at all).
   override(CommentPost.prototype, 'elementAttrs', function (original) {
     const attrs = original();
     const post = this.attrs.post;
     attrs.className = classList(attrs.className, {
-      'Post--hasReplies': !post.isReply() && post.repliesCount() > 0,
+      'Post--hasReplies': !post.isReply() && post.number() !== 1 && post.repliesCount() > 0,
     });
     return attrs;
   });

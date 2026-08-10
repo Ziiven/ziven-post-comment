@@ -173,7 +173,7 @@
 }
 
 // ------------------------------------------------------------------
-// Controls (View N more / Collapse)
+// Controls (View N more / Collapse / Reply)
 // ------------------------------------------------------------------
 .NestedReplies-controls {
   margin-top: 8px;
@@ -188,11 +188,63 @@
   padding: 2px 6px;
 }
 
+// v0.1.0d: the "Reply" button that toggles the inline composer.
+// Same color as the parent-post's Reply action (`.Post-nestedReplyBtn`)
+// so the visual language is consistent.
+.NestedReplies-replyBtn {
+  color: @ziven-reply-accent;
+  font-weight: 500;
+  font-size: 13px;
+  margin-left: auto; // push to the right when other controls are present
+}
+
+[data-theme^="dark"] .NestedReplies-replyBtn {
+  color: @ziven-reply-accent-dark;
+}
+
+// v0.1.0d Bug 3 fix: when the post has no nested replies yet AND the
+// composer is closed, the wrapper is rendered in `--empty` state
+// which collapses the controls row to just the Reply button (no View
+// N more / Collapse spacers, no list gap). The Reply button is
+// re-styled to look like a primary CTA so it's the obvious next step
+// for the user.
+.NestedReplies--empty .NestedReplies-controls {
+  margin-top: 0;
+}
+.NestedReplies--empty .NestedReplies-replyBtn {
+  margin-left: 0;
+  background: @ziven-reply-accent;
+  color: #fff;
+  padding: 4px 12px;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+  &:hover {
+    background: darken(@ziven-reply-accent, 8%);
+  }
+}
+[data-theme^="dark"] .NestedReplies--empty .NestedReplies-replyBtn {
+  background: @ziven-reply-accent-dark;
+  &:hover {
+    background: lighten(@ziven-reply-accent-dark, 6%);
+  }
+}
+
 // ------------------------------------------------------------------
 // ReplyComposer (inline)
 // ------------------------------------------------------------------
 .NestedReplies-composer {
   margin-top: 10px;
+  // v0.1.0d: composer is hidden by default; user clicks the
+  // "Reply" button to show it. The wrapper element gets
+  // `.NestedReplies--composer-shown` (toggled in
+  // NestedReplies._applyComposer) when the composer is open;
+  // CSS then reveals the container. The inline `style="display:
+  // none"` set in view() is the initial value; the `--composer-shown`
+  // class on the wrapper takes over once the user clicks.
+  display: none;
+}
+.NestedReplies--composer-shown .NestedReplies-composer {
+  display: block;
 }
 
 .ReplyComposer {

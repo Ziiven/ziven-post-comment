@@ -4,7 +4,7 @@ A Flarum 2.0 extension that adds **single-level nested replies** (楼中楼) to 
 
 - Replies are rendered inline under the parent comment, with a blue left border and a compact avatar.
 - The first 3 replies are always visible; a **"View N more replies"** button lazy-loads the rest.
-- A **"Reply"** action on each top-level comment opens an inline mini-composer.
+- A **"Reply"** action on each top-level comment toggles an inline mini-composer (hidden by default — click "Reply" to show).
 - The author of the parent post receives a **`postCommented`** notification (configurable in user preferences).
 - Single-level only: replies cannot themselves be replied to (flat one-layer thread).
 

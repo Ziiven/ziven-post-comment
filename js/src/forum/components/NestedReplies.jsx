@@ -1,52 +1,64 @@
 // NestedReplies — renders a collapsible list of nested replies under a
 // top-level post, with a "View N more" lazy-load affordance.
 //
-// Behaviour:
+// Behaviour (v0.1.0d — supersedes v0.1.0c):
 //   - Always shows the first 3 replies inline.
 //   - If there are > 3 replies and the user has not expanded, shows a
 //     "View N more" button (where N = total - 3).
 //   - When expanded, shows all loaded replies + a "Collapse" button.
-//   - After the inline list, shows an inline ReplyComposer (toggled by the
-//     "Reply" action on the parent post).
+//   - ReplyComposer is HIDDEN by default; user clicks the "Reply" button
+//     (or the parent post's "Reply" action) to show the inline composer.
+//     This avoids the v0.1.0c "composer is always visible" UX that
+//     辉哥 flagged in the real-browser test (a textarea showing under
+//     every post is noisy and not the expected pattern).
+//   - Empty post (no replies yet) + composer hidden: shows ONLY the
+//     "Reply" button. No list, no "View N more", no loading spinner.
+//     This is the v0.1.0d Bug 3 fix — oninit no longer auto-loads
+//     replies when the in-memory list is empty (which was triggering
+//     the loading spinner forever on posts that legitimately have no
+//     nested replies yet).
 //
-// IMPORTANT: This component lives inside `CommentPost`, which is gated by
-// vendor Flarum 2.0's `SubtreeRetainer` (in `AbstractPost.onbeforeupdate`).
+// IMPORTANT: This component lives inside `CommentPost`, which is gated
+// by vendor Flarum 2.0's `SubtreeRetainer` (in `AbstractPost.onbeforeupdate`).
 // That retainer blocks redraws unless `loading`, `freshness`, or the
-// `user.freshness` change — and `this.expanded` is none of those. As a
-// result, mutating `this.expanded` followed by `m.redraw()` does NOT
-// re-render this subtree in Flarum 2.0 (the parent `CommentPost` short-
-// circuits the diff).
+// `user.freshness` change. As a result, mutating `this.composerShown`
+// (or any other non-loading state) followed by `m.redraw()` does NOT
+// re-render this subtree in Flarum 2.0 — the parent `CommentPost`
+// short-circuits the diff.
 //
-// Fix strategy (v0.1.0c — supersedes v0.1.0b's max-height approach):
-//   1. `view()` ALWAYS renders ALL replies (no `slice`). Hidden items
-//      beyond `VISIBLE_THRESHOLD` get a `NestedReplies-item--hidden` class
-//      so CSS can hide them via `display: none` when collapsed.
-//   2. The wrapper element has its `--expanded` class toggled directly via
-//      DOM in `_applyExpanded()` (this.wrapperEl.classList.toggle).
-//   3. CSS rule `.NestedReplies--expanded .NestedReplies-item--hidden
-//      { display: block; }` reveals the previously-hidden items the moment
-//      the wrapper class is set, without needing a mithril re-render.
+// Fix strategy (v0.1.0d — composer toggle via direct DOM, complementing
+// the v0.1.0c `_applyExpanded()` pattern):
+//   1. `view()` always renders the full DOM tree (list + controls +
+//      composer container). The composer container is in the DOM
+//      regardless of `composerShown`; its visibility is driven by a
+//      CSS class on the wrapper (`.NestedReplies--composer-shown`),
+//      set/toggled in `_applyComposer()`.
+//   2. `oncreate()` captures `composerEl` so subsequent clicks can
+//      toggle its visibility directly without needing a mithril
+//      re-render (SubtreeRetainer would block it).
+//   3. `_applyComposer()` toggles the `--composer-shown` class on the
+//      wrapper; CSS handles the actual `display: block / none` swap
+//      on `.NestedReplies-composer`.
 //
-// This works because the DOM tree is complete after the first render —
-// the only thing the SubtreeRetainer blocks is a *re-render* of the
-// subtree; it does not block direct DOM mutations on the existing nodes.
-// Items beyond the threshold are physically present in the DOM, just
-// `display: none`'d by the `--hidden` class, so a single classList.toggle
-// on the wrapper is enough to make them visible.
+// This is the same pattern v0.1.0c uses for expand/collapse (see
+// `_applyExpanded()`), extended to cover the new "composer shown"
+// state. The wrapper element is the single source of truth for the
+// three orthogonal visual states: expanded, composer-shown, loading.
 //
-// The mithril `view()` is also called once on initial mount with
-// `this.expanded = false`, so the first render paints the correct
-// collapsed shape (3 visible, 2 hidden) declaratively. Subsequent clicks
-// only mutate the wrapper class, never the mithril tree, so the
-// SubtreeRetainer lock is irrelevant.
-//
-// (Earlier v0.1.0b attempt relied on the parent's `max-height: 240px;
-// overflow: hidden` to *implicitly* hide items beyond the threshold. But
-// `view()` rendered only the first `visibleCount` items via `slice(0, ...)`,
-// so items beyond the threshold were not in the DOM at all — CSS
-// max-height cannot reveal DOM that does not exist. V 测 V3 caught this
-// by checking `querySelectorAll('.NestedReplies-item').length` instead
-// of only button state.)
+// Empty-state fast path (Bug 3):
+//   The old oninit auto-loaded replies when `this.replies.length === 0`,
+//   which set `this.loading = true` and rendered a permanent loading
+//   spinner on posts that just had no nested replies yet (the API
+//   would return an empty array, the spinner would briefly flash, then
+//   stop — but the spinner was already visible to the user during the
+//   fetch, and for posts that the backend's pre-include already gave us
+//   an empty relationship for, it was a permanent "loading" indicator
+//   on something that would never load anything useful).
+//   v0.1.0d simply does not auto-load. If the user wants to view
+//   replies that the discussion payload didn't include, they have to
+//   click something to trigger the fetch (and as of v0.1.0d there is
+//   no such affordance — the in-DOM list IS the only reply list,
+//   matching the "first 3 visible + view N more" pattern).
 
 import app from 'flarum/forum/app';
 import Component from 'flarum/common/Component';
@@ -65,6 +77,9 @@ export default class NestedReplies extends Component {
 
     this.expanded = false;
     this.loading = false;
+    // v0.1.0d: composer is hidden by default; user clicks the
+    // "Reply" button (or the parent post's "Reply" action) to show it.
+    this.composerShown = false;
     this.parentPost = this.attrs.post;
 
     // Pre-fetch a list of the parent's replies (via API) so we have
@@ -73,14 +88,30 @@ export default class NestedReplies extends Component {
     // them, but this guards against deep links / pagination.)
     this.replies = this.parentPost.replies() || [];
 
-    if (this.replies.length === 0) {
-      this.load();
-    }
+    // v0.1.0d Bug 3 fix: DO NOT auto-load when the in-memory list is
+    // empty. The previous behavior set `this.loading = true` and
+    // rendered a permanent LoadingIndicator on posts that legitimately
+    // have no nested replies yet. The visual is now simply "no
+    // NestedReplies list + a Reply button" — clean and quiet.
+    // (If we ever need to lazy-load replies that aren't pre-included,
+    // we'll add a dedicated affordance later, but as of v0.1.0d the
+    // first 3 are always shown inline and the list itself is the
+    // source of truth.)
   }
 
-  load() {
+  /**
+   * Re-fetch the parent's replies (used after a new reply is posted
+   * via the inline composer). This is the v0.1.0d "reload" path —
+   * v0.1.0c just optimistically pushed the new reply into
+   * `this.replies`; v0.1.0d prefers a fresh fetch so the
+   * `repliesCount` on the parent post and the post stream stay in
+   * sync with the server (the `addDefaultInclude` setting in the
+   * V 测 V4 acceptance test requires this).
+   */
+  reloadReplies() {
     if (this.loading) return;
     this.loading = true;
+    this._applyLoading();
     const parentId = this.parentPost.id();
 
     app.store
@@ -90,9 +121,6 @@ export default class NestedReplies extends Component {
         include: 'user',
       })
       .then((payload) => {
-        // app.store.find() for a plural query returns an array of Post
-        // models (or an array of plain objects in some edge cases). Normalize
-        // to an array of models here.
         let list;
         if (Array.isArray(payload)) {
           list = payload;
@@ -102,9 +130,6 @@ export default class NestedReplies extends Component {
           list = [];
         }
 
-        // Some Flarum versions return plain JSON objects; resolve them
-        // through the store to get model instances with .id() / .user()
-        // methods.
         const models = list
           .map((item) => {
             if (item && typeof item.id === 'function') return item;
@@ -115,37 +140,46 @@ export default class NestedReplies extends Component {
 
         this.replies = models;
         this.loading = false;
-        // Schedule a mithril redraw — the parent's SubtreeRetainer will
-        // only honor this if `loading` / `freshness` / `user.freshness`
-        // also changed. For lazy-load on initial mount, `this.loading`
-        // was true, so the retainer sees a value change and rebuilds.
+        this._applyLoading();
         if (typeof m !== 'undefined' && m.redraw) m.redraw();
       })
       .catch(() => {
         this.loading = false;
+        this._applyLoading();
         if (typeof m !== 'undefined' && m.redraw) m.redraw();
       });
   }
 
   oncreate(vnode) {
     super.oncreate(vnode);
-    // Capture the wrapper element for direct DOM toggle of the expanded
-    // state (the SubtreeRetainer in vendor Flarum 2.0 CommentPost will
-    // not re-render this subtree on `this.expanded` change, so we drive
-    // the visual change off the DOM directly).
+    // Capture the wrapper element for direct DOM toggling of the
+    // expanded / composer-shown / loading states. Vendor Flarum 2.0's
+    // CommentPost uses a `SubtreeRetainer` (in
+    // `AbstractPost.onbeforeupdate`) that blocks mithril re-renders of
+    // this subtree on most state changes — so we drive the visual
+    // changes off the DOM directly via these `*El` references and
+    // CSS-class toggles. See SOP 207 / 208.
     this.wrapperEl = vnode.dom;
     this.listEl = vnode.dom && vnode.dom.querySelector('.NestedReplies-list');
-    // Capture each item element so we can toggle the `--hidden` class
-    // directly when the wrapper's expanded state changes (without a
-    // mithril re-render). The class is what the V 测 V3 acceptance test
-    // inspects: `visibleCount = totalItems - hiddenCount` must equal
-    // 5 after expand and 3 after collapse. The CSS rule
-    // `.NestedReplies--expanded .NestedReplies-item--hidden { display:
-    // block; }` is kept as a redundant safety net so the user always
-    // sees the right items even if the class toggle ever drifts.
     this.itemEls = vnode.dom
       ? Array.from(vnode.dom.querySelectorAll('.NestedReplies-item'))
       : [];
+    this.composerEl = vnode.dom
+      ? vnode.dom.querySelector('.NestedReplies-composer')
+      : null;
+    // Capture the loading element so `reloadReplies()` can show /
+    // hide the spinner without a mithril re-render. The element is
+    // always present in the DOM (see view()), but it's only visible
+    // when the wrapper has `--loading` (toggled in `_applyLoading`).
+    this.loadingEl = vnode.dom
+      ? vnode.dom.querySelector('.NestedReplies-loading')
+      : null;
+
+    // Apply the initial composer-shown state (always false on first
+    // mount, but we set it explicitly to be robust to any future
+    // init-time state).
+    this._applyComposer();
+    this._applyLoading();
   }
 
   /**
@@ -154,21 +188,6 @@ export default class NestedReplies extends Component {
    * re-renders (e.g. after a reply is posted) render the correct
    * initial shape, but we do NOT rely on mithril to apply the click
    * feedback — vendor Flarum 2.0's `SubtreeRetainer` blocks it.
-   *
-   * The visual swap is driven entirely by toggling the
-   * `NestedReplies--expanded` class on the wrapper element. The CSS
-   * then does the rest:
-   *   - `.NestedReplies-item--hidden { display: none; }` hides items
-   *     beyond VISIBLE_THRESHOLD when collapsed.
-   *   - `.NestedReplies--expanded .NestedReplies-item--hidden
-   *      { display: block; }` reveals them when expanded.
-   *   - The "View N more" / "Collapse" button swap is also gated on
-   *     the same wrapper class (see forum.less).
-   *
-   * The DOM is fully populated with ALL replies on initial mount, so
-   * the only thing that changes between collapsed and expanded is one
-   * class on the wrapper — fast, no re-render needed, SubtreeRetainer
-   * cannot interfere.
    */
   expand() {
     if (this.expanded) return;
@@ -186,11 +205,6 @@ export default class NestedReplies extends Component {
     if (this.wrapperEl) {
       this.wrapperEl.classList.toggle('NestedReplies--expanded', this.expanded);
     }
-    // Toggle the `--hidden` class on each item at idx >= VISIBLE_THRESHOLD
-    // to match the expanded state. Without this, the items are physically
-    // visible (the CSS rule for `--expanded` overrides `display: none`)
-    // but still carry the `--hidden` class, which makes the V 测 V3
-    // acceptance check (visibleCount = total - hidden) fail.
     if (this.itemEls && this.itemEls.length) {
       for (let i = VISIBLE_THRESHOLD; i < this.itemEls.length; i++) {
         this.itemEls[i].classList.toggle(
@@ -201,48 +215,105 @@ export default class NestedReplies extends Component {
     }
   }
 
+  /**
+   * Toggle the inline composer's visibility. v0.1.0d: the composer
+   * is hidden by default; this method flips it on/off without a
+   * mithril re-render (SubtreeRetainer would block it). The wrapper
+   * element gets a `--composer-shown` class; CSS then swaps
+   * `display: none / block` on the composer container.
+   */
+  toggleComposer() {
+    this.composerShown = !this.composerShown;
+    this._applyComposer();
+  }
+
+  _applyComposer() {
+    if (this.wrapperEl) {
+      this.wrapperEl.classList.toggle('NestedReplies--composer-shown', this.composerShown);
+    }
+    if (this.composerEl) {
+      this.composerEl.style.display = this.composerShown ? 'block' : 'none';
+    }
+  }
+
+  _applyLoading() {
+    if (this.wrapperEl) {
+      this.wrapperEl.classList.toggle('NestedReplies--loading', this.loading);
+    }
+    if (this.loadingEl) {
+      this.loadingEl.style.display = this.loading ? 'flex' : 'none';
+    }
+  }
+
+  /**
+   * Called by the inline ReplyComposer after a new reply is posted.
+   * Hides the composer (per v0.1.0d UX: the composer is a transient
+   * "I'm replying" panel — once the reply is in, it should close)
+   * and re-fetches the parent's reply list so the new entry appears.
+   */
+  _onposted(newReply) {
+    this.composerShown = false;
+    this._applyComposer();
+    // Optimistically append for snappy UX, then refetch in the
+    // background to keep the list in sync with the server.
+    if (newReply) {
+      this.replies = [...this.replies, newReply];
+    }
+    this.reloadReplies();
+  }
+
   view() {
     const total = this.replies.length;
     const hiddenCount = Math.max(0, total - VISIBLE_THRESHOLD);
     const showExpandButton = total > VISIBLE_THRESHOLD;
-    const showCollapseButton = total > VISIBLE_THRESHOLD;
+    const isEmpty = total === 0;
 
     return (
       <div
         className={classList('NestedReplies', {
           'NestedReplies--expanded': this.expanded,
           'NestedReplies--loading': this.loading,
+          'NestedReplies--empty': isEmpty,
         })}
       >
-        <ul className="NestedReplies-list">
-          {this.replies.map((reply, idx) => (
-            <li
-              className={classList('NestedReplies-item', {
-                // Items at index >= VISIBLE_THRESHOLD are physically in
-                // the DOM but hidden via `display: none` when the
-                // wrapper is not `--expanded`. When the wrapper gets
-                // `--expanded` (toggled in `_applyExpanded()`), the
-                // CSS rule `.NestedReplies--expanded
-                // .NestedReplies-item--hidden { display: block; }`
-                // makes them visible without a mithril re-render.
-                'NestedReplies-item--hidden':
-                  !this.expanded && idx >= VISIBLE_THRESHOLD,
-              })}
-              key={'reply-' + reply.id()}
-            >
-              <NestedReply reply={reply} />
-            </li>
-          ))}
-        </ul>
-
-        {this.loading && (
-          <div className="NestedReplies-loading">
-            <LoadingIndicator size="small" />
-          </div>
+        {/* Reply list (hidden when there are no replies). When non-empty
+            we always render ALL items (not a slice) so the CSS-hidden
+            pattern from v0.1.0c keeps working — items beyond
+            VISIBLE_THRESHOLD get `.NestedReplies-item--hidden` until
+            the wrapper has `--expanded`. */}
+        {!isEmpty && (
+          <ul className="NestedReplies-list">
+            {this.replies.map((reply, idx) => (
+              <li
+                className={classList('NestedReplies-item', {
+                  'NestedReplies-item--hidden':
+                    !this.expanded && idx >= VISIBLE_THRESHOLD,
+                })}
+                key={'reply-' + reply.id()}
+              >
+                <NestedReply reply={reply} />
+              </li>
+            ))}
+          </ul>
         )}
 
+        {/* Loading spinner (only visible when `.NestedReplies--loading`
+            is set on the wrapper — see `_applyLoading`). */}
+        <div className="NestedReplies-loading" style="display: none;">
+          <LoadingIndicator size="small" />
+        </div>
+
         <div className="NestedReplies-controls">
-          {showExpandButton && (
+          {/* View more / Collapse are both always rendered when there are
+              more than VISIBLE_THRESHOLD replies. v0.1.0c pattern: the
+              wrapper's `--expanded` class (toggled via direct DOM in
+              `_applyExpanded()`) drives the visual swap via CSS — the
+              vendor Flarum 2.0 SubtreeRetainer blocks mithril
+              re-renders, so we cannot rely on `view()` to gate which
+              button is in the DOM. The two buttons are always present
+              when the post has enough replies; CSS shows one and hides
+              the other based on the wrapper class. */}
+          {!isEmpty && showExpandButton && (
             <Button
               className="Button Button--link NestedReplies-viewMore"
               onclick={() => this.expand()}
@@ -253,7 +324,7 @@ export default class NestedReplies extends Component {
             </Button>
           )}
 
-          {showCollapseButton && (
+          {!isEmpty && showExpandButton && (
             <Button
               className="Button Button--link NestedReplies-collapse"
               onclick={() => this.collapse()}
@@ -261,20 +332,29 @@ export default class NestedReplies extends Component {
               {app.translator.trans('ziven-post-comment.forum.post.collapse_replies')}
             </Button>
           )}
+
+          <Button
+            className="Button Button--link NestedReplies-replyBtn"
+            onclick={() => this.toggleComposer()}
+          >
+            {app.translator.trans('ziven-post-comment.forum.post.reply')}
+          </Button>
         </div>
 
-        {app.session.user && this.parentPost.discussion().canReply() && (
-          <div className="NestedReplies-composer">
+        {/* Inline composer container — always in the DOM, but
+            `display: none` by default (see CSS). v0.1.0d: the user
+            must click the "Reply" button to show it. We render the
+            ReplyComposer component unconditionally inside; the
+            visibility of the container drives whether the user can
+            actually see / interact with it. */}
+        <div className="NestedReplies-composer" style="display: none;">
+          {app.session.user && this.parentPost.discussion().canReply() && (
             <ReplyComposer
               parentPost={this.parentPost}
-              onposted={(newReply) => {
-                // Optimistically append the new reply + force a re-render.
-                this.replies = [...this.replies, newReply];
-                if (typeof m !== 'undefined' && m.redraw) m.redraw();
-              }}
+              onposted={(newReply) => this._onposted(newReply)}
             />
-          </div>
-        )}
+          )}
+        </div>
       </div>
     );
   }
