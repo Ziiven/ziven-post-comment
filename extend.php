@@ -9,8 +9,11 @@
 
 namespace Ziven\PostComment;
 
+use Flarum\Api\Context;
 use Flarum\Api\Endpoint;
 use Flarum\Api\Resource;
+use Flarum\Api\Schema;
+use Flarum\Discussion\Discussion;
 use Flarum\Extend;
 use Flarum\Post\Event\Saving;
 use Flarum\Post\Filter\PostSearcher;
@@ -43,15 +46,21 @@ return [
         ->hasMany('replies', Post::class, 'parent_post_id'),
 
     // Add parentPost + repliesCount + isReply fields to PostResource.
-    // v0.1.0e.a design (辉哥拍板 2026-08-19 16:24, 撤回 v0.1.0e 的 A2
-    // 无限层 include): we include `replies` 1 level deep (plus
-    // `replies.user` for the author avatar/name) — single-level
-    // nested replies, matching WeChat 朋友圈 / 小黑盒 / 知乎 / 微博
-    // UX. v0.1.0e previously included 5 levels deep (each level
-    // included its own `replies` + `user`); that produced a
-    // quadratic payload bloat for the (rare) deeply-nested case,
-    // and the frontend no longer needs it because we don't render
-    // nested-of-nested anymore.
+    // v0.1.0e.b design (辉哥拍板 2026-08-19 20:49):
+    //   - Posts payload NO LONGER auto-includes `replies` /
+    //     `replies.user`. Nested replies are lazy-loaded by the
+    //     frontend NestedReplies component (3 default + 10 per
+    //     "展示更多" click), so we don't need the entire reply
+    //     subtree in the initial Post payload. This shrinks
+    //     payloads dramatically — a parent post with 109 nested
+    //     replies no longer ships all 109 children + their users
+    //     in the main discussion fetch.
+    //   - The `replies` / `replies.user` fields are still declared
+    //     on PostResource (via PostResourceFields) so the
+    //     frontend can `app.store.find('posts', { filter: {
+    //     parent: ... }, include: 'user' })` for explicit
+    //     pagination later if needed. But they are NOT
+    //     default-included anymore.
     (new Extend\ApiResource(Resource\PostResource::class))
         ->fields(PostResourceFields::class)
         ->endpoint(
@@ -59,10 +68,47 @@ return [
             function (Endpoint\Index|Endpoint\Show|Endpoint\Create|Endpoint\Update $endpoint): Endpoint\Endpoint {
                 return $endpoint->addDefaultInclude([
                     'parentPost', 'parentPost.user',
-                    'replies', 'replies.user',
+                    // 'replies' / 'replies.user' removed in v0.1.0e.b
+                    // (D2 辉哥拍板). Nested replies now lazy-loaded by
+                    // NestedReplies.jsx.
                 ]);
             }
         ),
+
+    // v0.1.0e.b: override vendor DiscussionResource's `posts`
+    // relationship to ONLY return top-level posts (parent_post_id IS
+    // NULL). Without this, `discussion.postIds()` returns the full
+    // 112 ids (5 主楼 + 107 reply) in mixed order, and the vendor
+    // PostStream slices that into a stream of 20 (主楼 + reply
+    // interleaved). The 辉哥 20:46 + 20:49 design says the main
+    // post stream should show ONLY 主楼; nested replies are a
+    // separate UI under each 主楼, lazy-loaded.
+    //
+    // The `get` callback is the one that vendor defines
+    // (DiscussionResource.php:225-229):
+    //     return $discussion->posts()
+    //         ->whereVisibleTo($context->getActor())
+    //         ->select('id')
+    //         ->get()
+    //         ->all();
+    // We override with the same shape but with
+    // `->whereNull('parent_post_id')` added. The
+    // `Extend\ApiResource::field('posts', ...)` mutator receives
+    // the existing field, returns a field with a replaced getter.
+    // (SOP 256: vendor discussion posts relationship override
+    // pattern; same shape as
+    // `addDefaultInclude([...])` used elsewhere.)
+    (new Extend\ApiResource(Resource\DiscussionResource::class))
+        ->field('posts', function (Schema\Relationship\ToMany $field): Schema\Relationship\ToMany {
+            return $field->get(function (Discussion $discussion, Context $context): array {
+                return $discussion->posts()
+                    ->whereNull('parent_post_id')
+                    ->whereVisibleTo($context->getActor())
+                    ->select('id')
+                    ->get()
+                    ->all();
+            });
+        }),
 
     // Filter: ?filter[parent]=null for top-level, ?filter[parent]=123 for a given post's replies
     (new Extend\SearchDriver(DatabaseSearchDriver::class))

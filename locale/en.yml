@@ -8,6 +8,10 @@ ziven-post-comment:
       # triggers the same toggle).
       reply: Reply
       view_more_replies: "View {count, plural, one {# more reply} other {# more replies}}"
+      # v0.1.0e.b: 辉哥 20:49 拍板的 "展示更多" 按钮.
+      # Matches 小黑盒 UX: a plain "Show more" button without a
+      # count. 3 by default + 10 per click.
+      load_more_replies: Show more
       collapse_replies: Collapse
       composer_placeholder: Write a reply…
       composer_submit: Post Reply
