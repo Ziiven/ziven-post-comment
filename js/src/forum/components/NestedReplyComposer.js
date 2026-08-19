@@ -56,39 +56,34 @@ function applyExtends(ReplyComposerClass) {
   if (!ReplyComposerClass || !ReplyComposerClass.prototype) return;
   _extendsApplied = true;
 
-  // ---- initAttrs: strip parentPost before attrs reach DOM ----
-  // The vendor `initAttrs` (inherited from ComposerBody) spreads
-  // `attrs` into the root mithril vnode's `attrs`, which mithril
-  // then turns into HTML attributes. We extract `parentPost`
-  // first so it doesn't end up as
-  // `parentpost="[object Object]"` on the composer root element.
-  // We stash it on a non-enumerable `__zpcParentPost` property
-  // on the returned attrs object; `oninit` (below) copies it to
-  // `this.parentPost` and deletes the marker.
-  extend(ReplyComposerClass.prototype, 'initAttrs', function (original, attrs) {
-    if (attrs && 'parentPost' in attrs) {
-      const parentPost = attrs.parentPost;
-      delete attrs.parentPost;
-      const result = original(attrs);
-      if (result) {
-        Object.defineProperty(result, '__zpcParentPost', {
-          value: parentPost,
-          enumerable: false,
-          configurable: true,
-          writable: true,
-        });
-      }
-      return result;
-    }
-    return original(attrs);
-  });
-
-  // ---- oninit: copy parentPost from attrs to instance ----
+  // ---- oninit: extract parentPost from attrs to instance ----
+  // We hook `oninit` (NOT `initAttrs`) because vendor
+  // `ReplyComposer.initAttrs` mutates `attrs` in place and
+  // does NOT return a new object. If we deleted `parentPost`
+  // in initAttrs and the value were re-rendered into a DOM
+  // attribute, we'd lose the reference; if we re-attached it
+  // via a non-enumerable prop, mithril's redraw wouldn't see
+  // it. The cleanest place to intercept is `oninit` — by then
+  // the instance exists, vendor's initAttrs has finished
+  // (mutating attrs), and we can save the value on
+  // `this.parentPost` and delete it from `this.attrs` so it
+  // doesn't get re-rendered as a DOM attribute on subsequent
+  // redraws.
+  //
+  // We DON'T need to override `initAttrs` because vendor's
+  // `initAttrs` is a no-op for the `parentPost` field — it
+  // doesn't try to read or write it. It only sets defaults for
+  // `placeholder`, `submitLabel`, `confirmExit`. The
+  // `parentPost` field is opaque to vendor.
   extend(ReplyComposerClass.prototype, 'oninit', function (original, vnode) {
     const result = original(vnode);
-    if (this.attrs && this.attrs.__zpcParentPost) {
-      this.parentPost = this.attrs.__zpcParentPost;
-      delete this.attrs.__zpcParentPost;
+    if (this.attrs && this.attrs.parentPost) {
+      this.parentPost = this.attrs.parentPost;
+      // Remove from attrs so mithril doesn't render it as
+      // `parentpost="[object Object]"` on the composer root
+      // element. We delete AFTER copying to be safe in case
+      // some downstream code reads `this.attrs.parentPost`.
+      delete this.attrs.parentPost;
     }
     return result;
   });
@@ -234,10 +229,29 @@ if (typeof flarum !== 'undefined' && flarum.reg) {
   }
 }
 
-// Re-export the vendor class. Callers do
+// Re-export as a thunk that triggers the vendor chunk load.
+// Vendor's `app.composer.load(t, attrs)` checks if `t` is a
+// Component class (has `prototype instanceof Component`). If
+// not, it treats `t` as a thunk: `t = (await t()).default`.
+// By exporting a thunk, we sidestep two chunk-load-order
+// problems at once:
+//   1. Our top-level `import ReplyComposer from '...'` is
+//      compiled to an async webpack dynamic import. The
+//      binding `ReplyComposer` is undefined in the synchronous
+//      portion of zpc's top-level module body — re-exporting
+//      it would export `undefined`, and `app.composer.load(
+//      undefined, attrs)` would fail.
+//   2. By the time the thunk actually runs (i.e. when
+//      `app.composer.load` awaits it), vendor's chunk is
+//      guaranteed loaded AND our `flarum.reg.onLoad` callback
+//      has fired AND `applyExtends` has patched the prototype.
+//      So the resulting instance is fully zpc-extended.
+//
+// Callers do
 //   app.composer.load(NestedReplyComposer, { parentPost: post })
 // which is functionally identical to
 //   app.composer.load(vendor ReplyComposer, { parentPost: post })
-// — same class, our extends already applied via the onLoad
-// hook above.
-export default ReplyComposer;
+// — the vendor class is constructed with our extends applied.
+export default function NestedReplyComposerLoader() {
+  return import('flarum/forum/components/ReplyComposer');
+}

@@ -133,23 +133,6 @@ export default class NestedReply extends Component {
       return;
     }
 
-    // ---- Open the vendor composer ----
-    // The click is on the body / content area (or the wrapper
-    // padding) of this NestedReply. Open the vendor
-    // NestedReplyComposer (which wraps vendor ReplyComposer) with
-    // `parentPost` set to this reply's post. This triggers
-    // `app.composer.load`, which shows the vendor composer
-    // 弹层 — the same composer experience as the discussion-level
-    // Reply, but with the new post linked to this specific
-    // NestedReply via `parent_post_id`.
-    const reply = this.attrs.reply;
-    if (!reply) return;
-
-    // Defensive: user must be logged in AND have reply permission.
-    if (!app.session.user || (reply.discussion() && !reply.discussion().canReply())) {
-      return;
-    }
-
     e.stopPropagation();
     e.preventDefault();
 
@@ -159,9 +142,20 @@ export default class NestedReply extends Component {
     // Our `extend()`-override of `data()` adds `parentPost`
     // to the relationships on top of the vendor's existing
     // `discussion`.
+    //
+    // We do NOT gate on `app.session.user` / `canReply()` here
+    // for the same reason as in index.js's CommentPost card
+    // handler — vendor's own load will refuse to load if the
+    // user can't reply, and gating on those conditions
+    // client-side actually *breaks* the click in real-world
+    // cases. Vendor's check is the source of truth.
     app.composer.load(NestedReplyComposer, {
-      parentPost: reply,
-      discussion: reply.discussion(),
+      parentPost: this.attrs.reply,
+      discussion: this.attrs.reply.discussion(),
+    }).then(() => {
+      if (!app.composer.isVisible()) {
+        return app.composer.show();
+      }
     });
   }
 

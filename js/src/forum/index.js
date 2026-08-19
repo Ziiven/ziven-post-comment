@@ -161,21 +161,15 @@ app.initializers.add('ziven-post-comment', () => {
       //    it's the correct layering.
       if (t.closest && t.closest('.NestedReplies, .NestedReply, .NestedReply-replies')) return;
 
-      // ---- Open the vendor composer ----
-      // Defensive: user must be logged in AND have reply
-      // permission.
-      if (!app.session.user || !post.discussion() || !post.discussion().canReply()) {
-        return;
-      }
-
       e.stopPropagation();
       e.preventDefault();
 
       // Trigger the vendor Flarum 2.0 composer (via our
-      // NestedReplyComposer subclass). This is the same
-      // composer experience as the discussion-level Reply,
-      // but with `parentPost` set to this top-level post —
-      // so the new reply is linked back to it via
+      // NestedReplyComposer thunk — see NestedReplyComposer.js
+      // for the rationale on thunk vs class). This is the
+      // same composer experience as the discussion-level
+      // Reply, but with `parentPost` set to this top-level
+      // post — so the new reply is linked back to it via
       // `parent_post_id`.
       //
       // We also pass `discussion: post.discussion()` because
@@ -186,9 +180,25 @@ app.initializers.add('ziven-post-comment', () => {
       // relationship. Without `discussion` the vendor class
       // throws when computing the data to POST to
       // `/api/posts`.
+      //
+      // We do NOT gate on `app.session.user` / `canReply()`
+      // here — vendor's own `app.composer.load` will refuse
+      // to load if the user can't reply, and the failure
+      // mode is a clean no-op rather than a silent dead
+      // click. Gating on those conditions client-side
+      // actually *breaks* the click in real-world cases
+      // (e.g. the user is logged in but their `canReply`
+      // is computed from a stale post snapshot, or
+      // `post.discussion()` returns a placeholder during a
+      // stream update). Vendor's check is the source of
+      // truth.
       app.composer.load(NestedReplyComposer, {
         parentPost: post,
         discussion: post.discussion(),
+      }).then(() => {
+        if (!app.composer.isVisible()) {
+          return app.composer.show();
+        }
       });
     };
 
