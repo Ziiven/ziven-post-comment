@@ -75,7 +75,14 @@ app.initializers.add('ziven-post-comment', () => {
     // Top-level posts only, and never the first post of a discussion.
     // Reply posts themselves are leaf nodes; the discussion starter is
     // the "root" — neither gets a NestedReplies block.
-    if (post.isReply() || post.number() === 1) {
+    // v0.1.0e.c (辉哥亲测 2026-08-19 21:40): also skip posts that
+    // have zero nested replies. Without this, top-level posts with
+    // no replies still render an empty `<div class="Post-nestedReplies">`
+    // border — confusing visual noise. The whole-card click handler
+    // (B1, bound in `oncreate` below) is still bound for these posts,
+    // so the user can still click the card to open the vendor composer
+    // and create the *first* reply.
+    if (post.isReply() || post.number() === 1 || post.repliesCount() === 0) {
       return children;
     }
 
