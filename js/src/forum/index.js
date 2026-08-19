@@ -177,7 +177,19 @@ app.initializers.add('ziven-post-comment', () => {
       // but with `parentPost` set to this top-level post —
       // so the new reply is linked back to it via
       // `parent_post_id`.
-      app.composer.load(NestedReplyComposer, { parentPost: post });
+      //
+      // We also pass `discussion: post.discussion()` because
+      // the vendor ReplyComposer is *Discussion-level* — its
+      // `data()` method reads `this.attrs.discussion` and
+      // our `extend()`-override of `data()` adds
+      // `parentPost` alongside the existing `discussion`
+      // relationship. Without `discussion` the vendor class
+      // throws when computing the data to POST to
+      // `/api/posts`.
+      app.composer.load(NestedReplyComposer, {
+        parentPost: post,
+        discussion: post.discussion(),
+      });
     };
 
     article.addEventListener('click', handler);

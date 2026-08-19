@@ -1,124 +1,122 @@
 // NestedReplyComposer — vendor Flarum 2.0 reply composer extended to
 // support a `parentPost` field (the post being replied to).
 //
-// v0.1.0e.a design (辉哥拍板 2026-08-19 16:24):
-//   - Use the **vendor Flarum 2.0 composer** (走 `app.composer.load(...
+// v0.1.0e.a design (辉哥拍板 2026-08-19 16:24, 撤回 v0.1.0e 的 A2 无限层):
+//   - Use the **vendor Flarum 2.0 composer** (走 `app.composer.load(
 //     ReplyComposer, ...)` 弹全局 composer 浮层) — NOT a zpc inline
 //     textarea composer.
 //   - Vendor `flarum/forum/components/ReplyComposer` is a
-//     *Discussion-level* composer (its `data()` returns
-//     `relationships: { discussion }`). It does not natively support
-//     a `parentPost` field — replying to a specific post (a
-//     nested reply) is a zpc-specific concept.
-//   - We extend the vendor ReplyComposer and override only:
-//       * `static initAttrs(attrs)` — pull `parentPost` out of the
-//         attrs so mithril doesn't pass it down to DOM attributes
-//         and to provide a parentPost-aware placeholder / submit
-//         label / confirmExit copy if we want to localize them later.
-//       * `data()` — add `relationships.parentPost` to the data
-//         sent to `/api/posts`, while still sending `discussion`
-//         (the API requires both: discussion is the parent
-//         relationship, parent_post_id is the column we add to point
-//         at the specific post inside that discussion).
-//       * `headerItems()` — change the title from "讨论标题" to
-//         "回复 @username" so the user knows which post they're
-//         replying to (vendor default is just the discussion title,
-//         which doesn't make sense for nested replies).
-//   - All other behavior — composer body rendering, validation,
-//     "view post" alert on success, etc. — is inherited verbatim
-//     from the vendor class. This is the cleanest way to get
-//     "vendor composer弹层" UX + "parentPost relationship" semantics
-//     without duplicating vendor logic.
-//
-// Why a separate file (instead of overriding vendor in place)?
-//   - We must NOT modify vendor files (SOP, also Flarum extension
-//     rule).
-//   - Inheriting from vendor in our own subclass is the
-//     standard Flarum extension pattern (e.g. `class MyComposer
-//     extends ComposerBody` is how custom composers are built in
-//     the Flarum ecosystem).
-//   - The file is named `NestedReplyComposer` (not
-//     `NestedReplyComposer.jsx`) because it does not use JSX
-//     syntax — it just overrides methods on the vendor class. This
-//     matches vendor's own `ReplyComposer.js` (no JSX).
-//
-// Trigger path (整张卡片 click):
-//   - `js/src/forum/index.js` — CommentPost card-click handler
-//     calls `app.composer.load(NestedReplyComposer, { parentPost })`
-//     when the user clicks the main-post card body.
-//   - `js/src/forum/components/NestedReply.jsx` — NestedReply
-//     card-click handler calls
-//     `app.composer.load(NestedReplyComposer, { parentPost: reply })`
-//     when the user clicks a NestedReply card.
-//
-// Note: we do NOT keep a zpc-specific visible composer anywhere —
-// the user always sees the vendor composer 弹层 (which is the
-// 辉哥 requirement: "用 Flarum 原生 composer, 不是 zpc 自加的
-// inline composer"). When the vendor composer posts a new reply,
-// the in-page nested-replies list is refreshed via
-// `app.store.find('posts', { filter: { parent } })` from the
-// caller's onsuccess callback (see index.js / NestedReply.jsx).
+//     *Discussion-level* composer. We need to inject a `parentPost`
+//     field and customize the title to show "回复 @username".
+//   - **Avoid subclassing**: vendor's `ReplyComposer` is a **lazy
+//     webpack chunk** in Flarum 2.0. Trying to
+//     `class NestedReplyComposer extends ReplyComposer` at the
+//     top of zpc dist's import time fails with "Class extends
+//     value undefined is not a constructor or null", killing the
+//     whole zpc initializer (no `Post--nestedClickable`, no
+//     `NestedReplies`, no card click handlers).
+//   - **Use mithril `extend()` at runtime** via `flarum.reg.onLoad`:
+//     register a callback that fires when the vendor ReplyComposer
+//     chunk is loaded, then `extend()` the vendor class's prototype
+//     with our `initAttrs` / `oninit` / `headerItems` / `data` /
+//     `onsubmit` overrides. The vendor class is never touched at
+//     zpc dist's import time (no extends), so the chunk can be
+//     async-loaded safely.
+//   - The default export of this file is the vendor `ReplyComposer`
+//     class itself. Callers do
+//     `app.composer.load(NestedReplyComposer, { parentPost: post })`
+//     which is functionally identical to
+//     `app.composer.load(vendor ReplyComposer, { parentPost: post })`
+//     once the extends have applied (which happens before any
+//     instance is constructed — the `app.composer.load` call
+//     itself triggers the chunk load via webpack dynamic import,
+//     and our onLoad callback runs in the same microtask).
 
 import app from 'flarum/forum/app';
-import appEvents from 'flarum/common/events';
-import ReplyComposer from 'flarum/forum/components/ReplyComposer';
+import { extend } from 'flarum/common/extend';
 import Link from 'flarum/common/components/Link';
 import Icon from 'flarum/common/components/Icon';
 
-export default class NestedReplyComposer extends ReplyComposer {
-  static initAttrs(attrs) {
-    super.initAttrs(attrs);
+// `import` here is fine even though ReplyComposer is a lazy chunk
+// — we never reference the binding in zpc's top-level module
+// body. We just re-export it. The `app.composer.load(...)` call
+// (in index.js / NestedReply.jsx) is what actually triggers the
+// chunk load via webpack's dynamic-import path, and our
+// `flarum.reg.onLoad` callback below hooks in to apply the
+// extends *before* the first instance is constructed.
+import ReplyComposer from 'flarum/forum/components/ReplyComposer';
 
-    // Pull the parent post out of attrs so the rest of the
-    // attrs tree (placeholder, submitLabel, etc.) doesn't carry it
-    // down to DOM. We save a reference on the instance via
-    // `this.parentPost` in `oninit` (see below).
-    this._parentPost = attrs.parentPost || null;
-  }
+// Apply our extends to the vendor prototype. Idempotent —
+// flarum.reg.onLoad fires the callback the first time the chunk
+// loads; subsequent calls to get() return the cached module,
+// and our onLoad returns early (the callback runs once).
+let _extendsApplied = false;
+function applyExtends(ReplyComposerClass) {
+  if (_extendsApplied) return;
+  if (!ReplyComposerClass || !ReplyComposerClass.prototype) return;
+  _extendsApplied = true;
 
-  oninit(vnode) {
-    super.oninit(vnode);
-    // Mirror the static-init capture onto the instance. The static
-    // method doesn't get `this`, so we save it on the prototype-level
-    // `this._parentPost` from initAttrs and then copy it onto the
-    // instance here.
-    this.parentPost = this._parentPost || null;
-  }
+  // ---- initAttrs: strip parentPost before attrs reach DOM ----
+  // The vendor `initAttrs` (inherited from ComposerBody) spreads
+  // `attrs` into the root mithril vnode's `attrs`, which mithril
+  // then turns into HTML attributes. We extract `parentPost`
+  // first so it doesn't end up as
+  // `parentpost="[object Object]"` on the composer root element.
+  // We stash it on a non-enumerable `__zpcParentPost` property
+  // on the returned attrs object; `oninit` (below) copies it to
+  // `this.parentPost` and deletes the marker.
+  extend(ReplyComposerClass.prototype, 'initAttrs', function (original, attrs) {
+    if (attrs && 'parentPost' in attrs) {
+      const parentPost = attrs.parentPost;
+      delete attrs.parentPost;
+      const result = original(attrs);
+      if (result) {
+        Object.defineProperty(result, '__zpcParentPost', {
+          value: parentPost,
+          enumerable: false,
+          configurable: true,
+          writable: true,
+        });
+      }
+      return result;
+    }
+    return original(attrs);
+  });
 
-  /**
-   * Override vendor `headerItems()` so the composer title shows
-   * "回复 @username" instead of the discussion title. The user
-   * needs to know *which* post they're replying to in a nested
-   * context — the discussion title alone is not informative.
-   */
-  headerItems() {
-    const items = super.headerItems();
+  // ---- oninit: copy parentPost from attrs to instance ----
+  extend(ReplyComposerClass.prototype, 'oninit', function (original, vnode) {
+    const result = original(vnode);
+    if (this.attrs && this.attrs.__zpcParentPost) {
+      this.parentPost = this.attrs.__zpcParentPost;
+      delete this.attrs.__zpcParentPost;
+    }
+    return result;
+  });
 
-    // Remove the default 'title' item (the one that shows the
-    // discussion title) and replace it with a parentPost-aware
-    // title. We use `remove()` rather than just adding a new one
-    // (SOP 254 — `items.remove` > wrap div / duplicate).
+  // ---- headerItems: change title to "回复 @username" ----
+  extend(ReplyComposerClass.prototype, 'headerItems', function (items) {
+    const parentPost = this.parentPost;
+    if (!parentPost) {
+      // No parentPost — vendor default title (discussion title)
+      // is fine (this is the discussion-level Reply path).
+      return items;
+    }
+
     if (items.has('title')) {
       items.remove('title');
     }
 
-    const parentPost = this.parentPost;
-    const parentUser = parentPost && typeof parentPost.user === 'function'
-      ? parentPost.user()
-      : null;
+    const parentUser = typeof parentPost.user === 'function' ? parentPost.user() : null;
     const parentUserName = parentUser && parentUser.displayName
       ? parentUser.displayName()
-      : (parentPost ? `#${parentPost.id()}` : '');
-    const parentHref = parentPost ? app.route.post(parentPost) : '#';
-    const parentDiscussion = parentPost && typeof parentPost.discussion === 'function'
+      : `#${parentPost.id()}`;
+    const parentDiscussion = typeof parentPost.discussion === 'function'
       ? parentPost.discussion()
       : null;
     const parentDiscussionHref = parentDiscussion
       ? app.route.discussion(parentDiscussion)
       : '#';
-    const parentDiscussionTitle = parentDiscussion
-      ? parentDiscussion.title()
-      : '';
+    const parentDiscussionTitle = parentDiscussion ? parentDiscussion.title() : '';
 
     items.add(
       'title',
@@ -131,8 +129,6 @@ export default class NestedReplyComposer extends ReplyComposer {
           <>
             {' '}
             <Link href={parentDiscussionHref} onclick={(e) => {
-              // Match vendor behavior: minimize composer on
-              // full-screen before navigating.
               if (app.composer.isFullScreen()) {
                 app.composer.minimize();
                 e.stopPropagation();
@@ -143,90 +139,105 @@ export default class NestedReplyComposer extends ReplyComposer {
           </>
         ) : null}
       </h3>,
-      // Place above any 'username' / 'meta' items so the title is
-      // always the first thing the user sees.
       100
     );
 
     return items;
-  }
+  });
 
-  /**
-   * Override vendor `data()` to add the `parentPost` relationship
-   * alongside `discussion`. The vendor returns:
-   *
-   *   { content, relationships: { discussion: this.attrs.discussion } }
-   *
-   * We need to add `parentPost` to the relationships so the API
-   * persists `parent_post_id` on the new post row. The `discussion`
-   * is still required (it's the discussion the new post belongs to;
-   * `parent_post_id` is just an extra column pointing at the
-   * specific post within the discussion).
-   */
-  data() {
-    const base = super.data();
-    const parentPost = this.parentPost;
-    if (!parentPost) {
+  // ---- data: add parentPost relationship ----
+  // Vendor returns `{ content, relationships: { discussion } }`.
+  // We add `parentPost` so the API persists `parent_post_id`.
+  extend(ReplyComposerClass.prototype, 'data', function (original) {
+    const base = original();
+    if (!this.parentPost) {
       return base;
     }
     return {
       ...base,
       relationships: {
         ...(base.relationships || {}),
-        parentPost,
+        parentPost: this.parentPost,
       },
     };
-  }
+  });
 
-  /**
-   * Override `onsubmit` to refresh the in-page nested-replies list
-   * after a successful reply post. Vendor's default is fine for
-   * top-level discussion replies (it updates the post stream), but
-   * for a nested reply, the post stream may not need updating
-   * (the new post is not part of the main stream) — what DOES
-   * need to happen is a refresh of the parent post's replies
-   * list, so the new reply shows up under the right post.
-   *
-   * Strategy: keep the vendor success path (alerts, post stream
-   * update, view button) AND fire a custom event so the
-   * NestedReplies component can refresh its list. We dispatch
-   * a `appEvents` event ('zpc:nestedReplyPosted') that the
-   * index.js / NestedReply.jsx callers can listen for.
-   */
-  onsubmit() {
+  // ---- onsubmit: refresh parent post's replies list on success ----
+  // The vendor onsubmit handles the post stream update + alert
+  // on success. We additionally fire a custom event so the
+  // NestedReplies component can refresh the in-page list.
+  // We dynamically import `appEvents` here (rather than at the
+  // top of the file) because `flarum/common/events` is also a
+  // webpack chunk that may not have loaded yet at the time the
+  // zpc dist's top-level module body runs (SOP 250 / vendor
+  // lazy chunk load). Resolving it at submit time — which only
+  // happens after the user has clicked a zpc card, by which
+  // point the forum chunks are all loaded — sidesteps the
+  // chunk-load-order issue.
+  extend(ReplyComposerClass.prototype, 'onsubmit', function (original) {
+    const result = original();
     const parentPost = this.parentPost;
-    const result = super.onsubmit();
-
-    // The vendor's onsubmit returns a Promise from .save(). We
-    // attach a `.then` to fire our custom event after a
-    // successful save, regardless of the result the vendor
-    // returns. (vendor uses .then(success, this.loaded.bind)
-    // internally, so we hook in via the public save result
-    // instead.)
-    if (parentPost && app.store && typeof app.store.find === 'function') {
-      // The vendor code already kicks off a post stream update
-      // (if `app.viewingDiscussion(discussion)`). We additionally
-      // fetch the new replies list for this parent post so the
-      // in-page NestedReplies component can re-render the new
-      // reply. We fire a custom event for the component to
-      // listen for, so this composer doesn't need to know about
-      // DOM internals.
+    if (parentPost) {
       setTimeout(() => {
-        app.store
-          .find('posts', {
-            filter: { parent: parentPost.id() },
-            include: 'user',
-          })
-          .then(() => {
+        const fire = (appEvents) => {
+          if (app.store && typeof app.store.find === 'function') {
+            app.store
+              .find('posts', {
+                filter: { parent: parentPost.id() },
+                include: 'user',
+              })
+              .then(() => {
+                appEvents.trigger('zpc:nestedReplyPosted', { parentPost });
+              })
+              .catch(() => {
+                appEvents.trigger('zpc:nestedReplyPosted', { parentPost });
+              });
+          } else {
             appEvents.trigger('zpc:nestedReplyPosted', { parentPost });
-          })
+          }
+        };
+        // Dynamic import — flarum/common/events is a chunk.
+        import('flarum/common/events')
+          .then((mod) => fire(mod.default || mod))
           .catch(() => {
-            // Silent — if the refresh fails, the user can
-            // still see the reply after a page reload.
+            // If we can't load the events module, the NestedReplies
+            // list won't auto-refresh. The user can still see the
+            // reply after a page reload.
           });
       }, 0);
     }
-
     return result;
+  });
+}
+
+// Apply the extends when the vendor chunk loads. The chunk
+// load is triggered by `app.composer.load(ReplyComposer, ...)`
+// (webpack dynamic import) — our onLoad callback runs in the
+// same microtask, before the first `new ReplyComposer(...)`
+// is invoked. We also try a synchronous `flarum.reg.get` in
+// case the chunk was already loaded by a prior code path
+// (e.g. the user already opened the discussion-level Reply
+// composer before clicking a zpc card).
+if (typeof flarum !== 'undefined' && flarum.reg) {
+  let alreadyLoaded = null;
+  try {
+    alreadyLoaded = flarum.reg.get('core', 'forum/components/ReplyComposer');
+  } catch (e) {
+    alreadyLoaded = null;
+  }
+  if (alreadyLoaded) {
+    applyExtends((alreadyLoaded && alreadyLoaded.default) ? alreadyLoaded.default : alreadyLoaded);
+  } else {
+    flarum.reg.onLoad('core', 'forum/components/ReplyComposer', (mod) => {
+      applyExtends((mod && mod.default) ? mod.default : mod);
+    });
   }
 }
+
+// Re-export the vendor class. Callers do
+//   app.composer.load(NestedReplyComposer, { parentPost: post })
+// which is functionally identical to
+//   app.composer.load(vendor ReplyComposer, { parentPost: post })
+// — same class, our extends already applied via the onLoad
+// hook above.
+export default ReplyComposer;

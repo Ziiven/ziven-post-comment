@@ -57,7 +57,6 @@
 //      spinner.
 
 import app from 'flarum/forum/app';
-import appEvents from 'flarum/common/events';
 import Component from 'flarum/common/Component';
 import Button from 'flarum/common/components/Button';
 import LoadingIndicator from 'flarum/common/components/LoadingIndicator';
@@ -114,7 +113,15 @@ export default class NestedReplies extends Component {
         this.reloadReplies();
       }
     };
-    appEvents.on('zpc:nestedReplyPosted', this._zpcReplyPostedHandler);
+    // Dynamic import — flarum/common/events is a webpack chunk
+    // that may not be loaded at zpc dist's module body run time.
+    import('flarum/common/events').then((mod) => {
+      this._zpcAppEvents = mod.default || mod;
+      this._zpcAppEvents.on('zpc:nestedReplyPosted', this._zpcReplyPostedHandler);
+    }).catch(() => {
+      // If events module can't be loaded, we just won't auto-
+      // refresh after a reply. The user can still post replies.
+    });
   }
 
   /**
@@ -124,8 +131,13 @@ export default class NestedReplies extends Component {
    */
   onremove(vnode) {
     if (this._zpcReplyPostedHandler) {
-      appEvents.off('zpc:nestedReplyPosted', this._zpcReplyPostedHandler);
+      // Use a captured reference to the same appEvents module
+      // we used in oncreate (so on/off are symmetric).
+      if (this._zpcAppEvents && typeof this._zpcAppEvents.off === 'function') {
+        this._zpcAppEvents.off('zpc:nestedReplyPosted', this._zpcReplyPostedHandler);
+      }
       this._zpcReplyPostedHandler = null;
+      this._zpcAppEvents = null;
     }
     super.onremove(vnode);
   }

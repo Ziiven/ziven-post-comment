@@ -153,7 +153,16 @@ export default class NestedReply extends Component {
     e.stopPropagation();
     e.preventDefault();
 
-    app.composer.load(NestedReplyComposer, { parentPost: reply });
+    // Pass `discussion` alongside `parentPost` so the vendor
+    // ReplyComposer (which is a *Discussion-level* composer)
+    // has the discussion it needs for its data() payload.
+    // Our `extend()`-override of `data()` adds `parentPost`
+    // to the relationships on top of the vendor's existing
+    // `discussion`.
+    app.composer.load(NestedReplyComposer, {
+      parentPost: reply,
+      discussion: reply.discussion(),
+    });
   }
 
   view() {
