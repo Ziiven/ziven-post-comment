@@ -1,30 +1,25 @@
-// Ziven Post Comment — infinite-nesting nested replies (仿小黑盒)
+// Ziven Post Comment — single-level nested replies with vendor Flarum 2.0
+// composer for replying.
 //
-// v0.1.0e redesign (辉哥拍板 2026-08-19 14:35):
-//   - A2: replies are now infinite-nesting (a reply of a reply can
-//     itself be replied to, and so on). The previous A1 single-level
-//     guard (RejectNestedReply listener + addDefaultInclude
-//     "replies" only) is removed.
-//   - B1: the entire main-post card (CommentPost) is clickable to
-//     open the inline reply composer (a 小黑盒-style "click
-//     anywhere on the card to reply" UX). The vendor-supplied
-//     "Reply" link/button on the post is preserved (C1) and still
-//     uses vendor semantics for its reply flow.
-//   - C1: vendor's "Reply" link/button is preserved unchanged.
-//     Users can either click anywhere on the card OR use the
-//     vendor "Reply" button to enter the global reply flow.
-//   - D1: nested layers keep the v0.1.0d defaults (3 visible,
-//     "View N more" for the rest, no auto-load).
-//
-// Implementation: a native `click` listener on the CommentPost
-// `<article>` (SOP 207 / 208 — vendor Flarum 2.0's
-// SubtreeRetainer blocks mithril JSX `onclick` re-binding, so we
-// bind a native listener once in `oncreate` and rely on the DOM
-// node being stable until the parent re-renders the post list).
-// The listener excludes: anchors (let browser navigate), vendor
-// Post-actions (like / vendor reply), child NestedReplies /
-// NestedReply elements (each has its own card-click handler),
-// and the composer itself (let it handle its own input).
+// v0.1.0e.a redesign (辉哥拍板 2026-08-19 16:24, 撤回 v0.1.0e 的 A2 无限层):
+//   - 单层: only top-level posts host a NestedReplies block.
+//     NestedReplies themselves are leaf nodes. (WeChat 朋友圈 /
+//     小黑盒 / 知乎 / 微博 all use 1-level nested replies.)
+//   - B1 整张可点击: the entire main-post card (CommentPost) is
+//     clickable to open the vendor Flarum 2.0 composer (走
+//     `app.composer.load(NestedReplyComposer, { parentPost })`).
+//     This is the 辉哥 "用 Flarum 原生 composer" requirement —
+//     NOT a zpc inline composer.
+//   - B2 更严: the click now ignores `.Post-header` (the entire
+//     vendor header area — username / time / avatar / role badge),
+//     in addition to the previous `.Post-actions`, links, and
+//     `.NestedReplies` / `.NestedReply` children. The user must
+//     click `.Post-body` (the post body) to trigger the reply
+//     composer.
+//   - C1 保留: NestedReply 整张可点击, 也走 vendor composer.
+//   - D 单层后端守卫: 恢复 `RejectNestedReply` listener
+//     (单层守卫, 跟 v0.1.0d 一致) — API 拒绝创建"回复的
+//     回复". addDefaultInclude 改回 1 层 include.
 
 import app from 'flarum/forum/app';
 import { extend, override } from 'flarum/common/extend';
@@ -32,6 +27,7 @@ import CommentPost from 'flarum/forum/components/CommentPost';
 import classList from 'flarum/common/utils/classList';
 
 import NestedReplies from './components/NestedReplies';
+import NestedReplyComposer from './components/NestedReplyComposer';
 
 // Make `app.store`'s Post model understand the new fields. Without this the
 // frontend will not know about `parentPost()`, `repliesCount()`, or `isReply()`
@@ -91,13 +87,6 @@ app.initializers.add('ziven-post-comment', () => {
     return children;
   });
 
-  // v0.1.0e: removed the extension-defined "Reply" action on the
-  // CommentPost's actionItems (the old
-  // `items.add('nested-reply', <Button ...>)` block). The card is
-  // now clickable as a whole, and the vendor "Reply" link is
-  // preserved (C1). Removing the extension's "Reply" action avoids
-  // two redundant entry points into the same composer.
-
   // Override the elementAttrs to add `Post--hasReplies` when this post has
   // nested replies, so we can show an indicator (e.g. a left border).
   // v0.1.0d: also skip the first post — the starter post never gets the
@@ -117,15 +106,19 @@ app.initializers.add('ziven-post-comment', () => {
     return attrs;
   });
 
-  // v0.1.0e: bind a native `click` listener on the CommentPost
-  // `<article>` to implement "click anywhere on the card to reply"
-  // (B1 in the v0.1.0e spec). The vendor-supplied "Reply" button
-  // is preserved (C1) and uses vendor semantics — this listener
-  // is the *additional* entry point into the same inline composer.
-  // The listener is bound natively (not via mithril JSX `onclick`)
-  // because vendor Flarum 2.0's `SubtreeRetainer` blocks
-  // CommentPost subtree re-renders, which would orphan any
-  // mithril-attached click handler. SOP 207 / 208 pattern.
+  // v0.1.0e.a: bind a native `click` listener on the CommentPost
+  // `<article>` to implement "click the post body to reply" (B1
+  // 辉哥). The click now opens the **vendor Flarum 2.0
+  // composer** (via NestedReplyComposer) — NOT a zpc inline
+  // composer. The vendor "Reply" button on the post (if any) is
+  // preserved (C1) and uses vendor semantics — this listener
+  // is the *additional* entry point into the same vendor
+  // composer.
+  //
+  // The listener is bound natively (not via mithril JSX
+  // `onclick`) because vendor Flarum 2.0's `SubtreeRetainer`
+  // blocks CommentPost subtree re-renders, which would orphan
+  // any mithril-attached click handler. SOP 207 / 208 pattern.
   override(CommentPost.prototype, 'oncreate', function (original, vnode) {
     original(vnode);
 
@@ -144,8 +137,7 @@ app.initializers.add('ziven-post-comment', () => {
       if (!e || !e.target) return;
       const t = e.target;
 
-      // Exclusion list (any match → bail out and let the
-      // click reach whatever is underneath):
+      // Exclusion list (B2 辉哥 task, v0.1.0e.a):
       //
       // 1. Links — username / time / vendor action links must
       //    still navigate.
@@ -155,24 +147,37 @@ app.initializers.add('ziven-post-comment', () => {
       //    button, etc.) — vendor has its own click semantics.
       if (t.closest && t.closest('.Post-actions')) return;
 
-      // 3. NestedReplies / NestedReply children — each has its
-      //    own card-click handler (NestedReply.bindCardClick).
-      //    The child handler calls `stopPropagation()`, so this
-      //    is defensive, but it's the correct layering.
+      // 3. Vendor Post-header (B2 NEW) — the entire vendor
+      //    header area (username link, time link, avatar,
+      //    role badge) is a navigation area, not a "click to
+      //    reply" affordance. The user must click `.Post-body`
+      //    to trigger the reply composer.
+      if (t.closest && t.closest('.Post-header')) return;
+
+      // 4. NestedReplies / NestedReply children — each has
+      //    its own card-click handler (NestedReply.jsx
+      //    `_handleCardClick`). The child handler calls
+      //    `stopPropagation()`, so this is defensive, but
+      //    it's the correct layering.
       if (t.closest && t.closest('.NestedReplies, .NestedReply, .NestedReply-replies')) return;
 
-      // 4. The composer itself (if the user is typing in the
-      //    textarea) — let the composer handle its own clicks.
-      if (t.closest && t.closest('.NestedReplies-composer, .ReplyComposer')) return;
-
-      // ---- Open the composer on the post's NestedReplies ----
-      const nested = article.querySelector('.Post-nestedReplies .NestedReplies');
-      if (!nested) return;
-      const inst = nested.__zpcNestedReplies;
-      if (inst && typeof inst.toggleComposer === 'function') {
-        inst.toggleComposer();
-        e.stopPropagation();
+      // ---- Open the vendor composer ----
+      // Defensive: user must be logged in AND have reply
+      // permission.
+      if (!app.session.user || !post.discussion() || !post.discussion().canReply()) {
+        return;
       }
+
+      e.stopPropagation();
+      e.preventDefault();
+
+      // Trigger the vendor Flarum 2.0 composer (via our
+      // NestedReplyComposer subclass). This is the same
+      // composer experience as the discussion-level Reply,
+      // but with `parentPost` set to this top-level post —
+      // so the new reply is linked back to it via
+      // `parent_post_id`.
+      app.composer.load(NestedReplyComposer, { parentPost: post });
     };
 
     article.addEventListener('click', handler);

@@ -11,12 +11,15 @@ ziven-post-comment:
       collapse_replies: Collapse
       composer_placeholder: Write a reply…
       composer_submit: Post Reply
+    composer:
+      # v0.1.0e.a: NestedReplyComposer title
+      reply_to: "Reply to @{username}"
     settings:
       notify_post_commented_label: "Someone replies to my post"
   admin:
     settings:
       heading: "Ziven Post Comment"
-      description: "Single-level nested replies for top-level comments. Replies can themselves receive likes and mentions, but cannot be replied to again (single-level only)."
+      description: "Single-level nested replies for top-level comments. Replies can themselves receive likes and mentions, but cannot be replied to again (single-level only — like WeChat Moments / XiaoHeiHe / Zhihu / Weibo)."
   lib:
     notification:
       post_commented_text: "{username} replied to your post"

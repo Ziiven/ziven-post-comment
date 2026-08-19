@@ -49,9 +49,13 @@ class SendNotificationWhenPostIsReplied
             return;
         }
 
-        // A1 single-level: only notify on top-level parents. A reply-of-a-reply
-        // is rejected at the API layer (RejectNestedReply listener), so this
-        // check is a defense-in-depth in case the API guard is bypassed.
+        // v0.1.0e.a design (辉哥拍板 2026-08-19 16:24, 撤回 v0.1.0e 的
+        // A2 无限层): single-level only — only notify on top-level
+        // parents. A reply-of-a-reply is rejected at the API layer
+        // (RejectNestedReply listener), so this check is a
+        // defense-in-depth in case the API guard is bypassed.
+        // v0.1.0e had removed this check (it allowed infinite
+        // nesting); v0.1.0e.a restores it.
         if ($parent->parent_post_id !== null) {
             return;
         }
