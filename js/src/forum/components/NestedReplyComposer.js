@@ -33,7 +33,7 @@
 //     and our onLoad callback runs in the same microtask).
 
 import app from 'flarum/forum/app';
-import { extend } from 'flarum/common/extend';
+import { extend, override } from 'flarum/common/extend';
 import Link from 'flarum/common/components/Link';
 import Icon from 'flarum/common/components/Icon';
 
@@ -75,8 +75,11 @@ function applyExtends(ReplyComposerClass) {
   // doesn't try to read or write it. It only sets defaults for
   // `placeholder`, `submitLabel`, `confirmExit`. The
   // `parentPost` field is opaque to vendor.
-  extend(ReplyComposerClass.prototype, 'oninit', function (original, vnode) {
-    const result = original(vnode);
+  override(ReplyComposerClass.prototype, 'oninit', function (original, vnode) {
+    // 防御性 super-call: vendor oninit 通常无 return, 但万一未来有, 我们尊重
+    if (typeof original === 'function') {
+      original.call(this, vnode);
+    }
     if (this.attrs && this.attrs.parentPost) {
       this.parentPost = this.attrs.parentPost;
       // Remove from attrs so mithril doesn't render it as
@@ -85,7 +88,6 @@ function applyExtends(ReplyComposerClass) {
       // some downstream code reads `this.attrs.parentPost`.
       delete this.attrs.parentPost;
     }
-    return result;
   });
 
   // ---- headerItems: change title to "回复 @username" ----
@@ -143,8 +145,9 @@ function applyExtends(ReplyComposerClass) {
   // ---- data: add parentPost relationship ----
   // Vendor returns `{ content, relationships: { discussion } }`.
   // We add `parentPost` so the API persists `parent_post_id`.
-  extend(ReplyComposerClass.prototype, 'data', function (original) {
-    const base = original();
+  override(ReplyComposerClass.prototype, 'data', function (original) {
+    // 防御性 super-call: vendor data() return { content, relationships: { discussion } }
+    const base = original ? original.call(this) : {};
     if (!this.parentPost) {
       return base;
     }
@@ -169,8 +172,9 @@ function applyExtends(ReplyComposerClass) {
   // happens after the user has clicked a zpc card, by which
   // point the forum chunks are all loaded — sidesteps the
   // chunk-load-order issue.
-  extend(ReplyComposerClass.prototype, 'onsubmit', function (original) {
-    const result = original();
+  override(ReplyComposerClass.prototype, 'onsubmit', function (original) {
+    // 防御性 super-call: vendor onsubmit 通常 return undefined, 但保留 result 以防万一
+    const result = original ? original.call(this) : undefined;
     const parentPost = this.parentPost;
     if (parentPost) {
       setTimeout(() => {
