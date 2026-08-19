@@ -175,11 +175,40 @@ export default class NestedReplies extends Component {
       ? vnode.dom.querySelector('.NestedReplies-loading')
       : null;
 
+    // v0.1.0e: stash the mithril instance on the wrapper DOM node
+    // so the card-click handlers in CommentPost and NestedReply
+    // (which fire from `e.target.closest('.NestedReplies')` lookups
+    // in native event listeners) can find this instance and call
+    // `showComposer()` / `toggleComposer()` on it. mithril's
+    // reconciler does not expose a built-in way to recover the
+    // component instance from a DOM node (the vnode goes through
+    // mithril's `pool` / `view()` cycle without leaving a
+    // reference on the DOM), so we do it ourselves.
+    if (this.wrapperEl) {
+      this.wrapperEl.__zpcNestedReplies = this;
+    }
+
     // Apply the initial composer-shown state (always false on first
     // mount, but we set it explicitly to be robust to any future
     // init-time state).
     this._applyComposer();
     this._applyLoading();
+  }
+
+  /**
+   * v0.1.0e: clean up the DOM reference to the mithril instance
+   * when the component is removed. Without this, the global-ish
+   * reference could prevent the GC from collecting the component
+   * (the wrapper element would still hold a strong ref to the
+   * component instance, which in turn holds DOM refs, etc.).
+   * `onremove` is the mithril lifecycle hook called before the
+   * DOM node is detached.
+   */
+  onremove(vnode) {
+    if (this.wrapperEl) {
+      this.wrapperEl.__zpcNestedReplies = null;
+    }
+    super.onremove(vnode);
   }
 
   /**
@@ -221,9 +250,43 @@ export default class NestedReplies extends Component {
    * mithril re-render (SubtreeRetainer would block it). The wrapper
    * element gets a `--composer-shown` class; CSS then swaps
    * `display: none / block` on the composer container.
+   *
+   * v0.1.0e: this method is now also the public API used by the
+   * parent CommentPost / NestedReply card-click handlers to open the
+   * composer when the user clicks the entire post / reply card
+   * (小黑盒-style "click anywhere on the card to reply" UX). We
+   * deliberately do NOT also use the auto-closing "View N more"
+   * button or any other trigger — this method is the single source
+   * of truth for composer visibility.
    */
   toggleComposer() {
     this.composerShown = !this.composerShown;
+    this._applyComposer();
+  }
+
+  /**
+   * v0.1.0e: public method to forcibly show the inline composer
+   * (regardless of its current state). Used by the card-click
+   * handler — the user expects a single click to open the composer
+   * (idempotent), and `toggleComposer()` would close it on a second
+   * accidental click. The DOM update is direct (SOP 207 / 208
+   * pattern — no mithril redraw, because vendor Flarum 2.0's
+   * `SubtreeRetainer` blocks re-renders of this subtree).
+   */
+  showComposer() {
+    if (this.composerShown) return;
+    this.composerShown = true;
+    this._applyComposer();
+  }
+
+  /**
+   * v0.1.0e: public method to forcibly hide the inline composer.
+   * Mirrors `showComposer()`. The DOM update is direct for the same
+   * reason as `showComposer()` (SOP 207 / 208).
+   */
+  hideComposer() {
+    if (!this.composerShown) return;
+    this.composerShown = false;
     this._applyComposer();
   }
 
@@ -247,19 +310,199 @@ export default class NestedReplies extends Component {
 
   /**
    * Called by the inline ReplyComposer after a new reply is posted.
-   * Hides the composer (per v0.1.0d UX: the composer is a transient
-   * "I'm replying" panel — once the reply is in, it should close)
-   * and re-fetches the parent's reply list so the new entry appears.
+   * v0.1.0e: SOP 208 DOM-append path. Hides the composer (the composer
+   * is a transient "I'm replying" panel — once the reply is in, it
+   * should close) and appends the new reply directly to the DOM, by-
+   * passing the mithril re-render that vendor Flarum 2.0's
+   * SubtreeRetainer would otherwise block. We still call
+   * `reloadReplies()` in the background so the list stays in sync with
+   * the server (and so the `repliesCount` on the parent post is
+   * correct), but the user sees the new reply *immediately* via the
+   * DOM-append, not after a fetch roundtrip.
+   *
+   * The DOM-append is necessary because, in v0.1.0d, we relied on
+   * `m.redraw()` inside `_onposted` to re-evaluate the list — but
+   * SubtreeRetainer (`AbstractPost.onbeforeupdate`) blocks re-renders
+   * of the CommentPost subtree, so the new reply only showed up after
+   * a full page reload. V 测 V5 confirmed this with the "API direct
+   * create reply" test: DB had the reply, but the in-page list didn't
+   * show it. (See SOP 207 / 208 for the full SubtreeRetainer
+   * rationale.)
    */
   _onposted(newReply) {
     this.composerShown = false;
     this._applyComposer();
-    // Optimistically append for snappy UX, then refetch in the
-    // background to keep the list in sync with the server.
+
     if (newReply) {
+      // Optimistically append to our in-memory list so any subsequent
+      // mithril pass (if it ever happens) renders the right number of
+      // items. The DOM update below is the user-visible change.
       this.replies = [...this.replies, newReply];
+
+      // Update the parent post's `repliesCount` so the rest of the page
+      // (post stream, notification logic, etc.) sees a consistent
+      // count. We write the model attribute directly; the next
+      // `reloadReplies()` will reconcile with the server's count.
+      if (this.parentPost) {
+        const current =
+          typeof this.parentPost.repliesCount === 'function'
+            ? this.parentPost.repliesCount()
+            : (this.parentPost.data && this.parentPost.data.attributes
+                ? this.parentPost.data.attributes.repliesCount
+                : 0) || 0;
+        if (this.parentPost.data && this.parentPost.data.attributes) {
+          this.parentPost.data.attributes.repliesCount = current + 1;
+        }
+      }
+
+      // SOP 208 DOM-append: build the new <li> with manual DOM APIs
+      // (bypassing mithril's reconciler, which is blocked by
+      // SubtreeRetainer), then append it to the list element. We
+      // also create the list <ul> on the fly if this wrapper is
+      // currently in `--empty` state (no replies yet) — the new reply
+      // turns an empty post into a post-with-replies, so the list
+      // container must exist before we can append the item.
+      if (!this.listEl) {
+        this._createListEl();
+      }
+
+      if (this.listEl) {
+        const newLi = this._buildNewReplyLi(newReply);
+        this.listEl.appendChild(newLi);
+        // Refresh `itemEls` so subsequent expand/collapse / hidden-
+        // state toggles include the new item.
+        this.itemEls = this.listEl
+          ? Array.from(this.listEl.querySelectorAll('.NestedReplies-item'))
+          : [];
+      }
+
+      // The wrapper's `--empty` class is no longer accurate (we just
+      // added a reply). Remove it directly so the empty-state styling
+      // (Reply button re-styled as a primary CTA, no list gap, etc.)
+      // no longer applies.
+      if (this.wrapperEl && this.wrapperEl.classList.contains('NestedReplies--empty')) {
+        this.wrapperEl.classList.remove('NestedReplies--empty');
+      }
+
+      // Re-evaluate which items are hidden (the new item is at the
+      // tail, so it should be visible if total <= VISIBLE_THRESHOLD
+      // and hidden if total > VISIBLE_THRESHOLD and not expanded).
+      this._applyExpanded();
     }
+
+    // Background re-fetch keeps the list in sync with the server (in
+    // case anything changed in between — e.g. a different user
+    // replied, or the server-side `repliesCount` differs from the
+    // optimistic +1 we just wrote). If SubtreeRetainer blocks the
+    // resulting re-render, the DOM-append above is the visible
+    // result, so this is purely a "background correctness" pass.
     this.reloadReplies();
+  }
+
+  /**
+   * v0.1.0e (SOP 208): Create the `<ul class="NestedReplies-list">`
+   * element on the fly, for the case where the wrapper is in
+   * `--empty` state (no replies, no list in the DOM) and a new reply
+   * just arrived. The list is inserted before the controls row so
+   * the DOM order matches what `view()` would have produced.
+   */
+  _createListEl() {
+    if (!this.wrapperEl) return;
+    const ul = document.createElement('ul');
+    ul.className = 'NestedReplies-list';
+    const controls = this.wrapperEl.querySelector('.NestedReplies-controls');
+    if (controls && controls.parentNode === this.wrapperEl) {
+      this.wrapperEl.insertBefore(ul, controls);
+    } else {
+      this.wrapperEl.appendChild(ul);
+    }
+    this.listEl = ul;
+  }
+
+  /**
+   * v0.1.0e (SOP 208): Build a single `<li class="NestedReplies-item">`
+   * containing a `<article class="NestedReply">` mirroring the
+   * structure that `NestedReply.jsx`'s `view()` would produce. We
+   * build it with manual DOM APIs instead of mithril's render
+   * because (a) mithril's reconciler is blocked by SubtreeRetainer
+   * in this subtree, and (b) the NestedReply subtree doesn't have
+   * any interactive controls that need mithril lifecycle (the avatar
+   * and time links are plain anchors), so DOM construction is
+   * equivalent.
+   *
+   * The content (`newReply.contentHtml()`) is set via `innerHTML`
+   * directly — the backend has already sanitized the HTML (the
+   * existing v0.1.0d code uses `m.trust(reply.contentHtml())` for
+   * this exact reason), so this is not a new XSS surface.
+   */
+  _buildNewReplyLi(newReply) {
+    const li = document.createElement('li');
+    li.className = 'NestedReplies-item';
+    li.setAttribute('data-reply-id', newReply.id());
+
+    const article = document.createElement('article');
+    article.className = 'NestedReply';
+
+    // Resolve user (may be null if the post payload didn't include it
+    // — we still render a placeholder so the layout doesn't shift).
+    const user = typeof newReply.user === 'function' ? newReply.user() : null;
+    const userName = user && user.displayName ? user.displayName() : 'Unknown';
+    const userHref = user ? app.route.user(user) : '#';
+    const avatarUrl = user && user.avatarUrl ? user.avatarUrl() : '';
+
+    // ---- avatar
+    const avatarWrap = document.createElement('div');
+    avatarWrap.className = 'NestedReply-avatar';
+    const avatarLink = document.createElement('a');
+    avatarLink.href = userHref;
+    const avatarImg = document.createElement('img');
+    avatarImg.className = 'NestedReply-avatar-img Avatar';
+    if (avatarUrl) avatarImg.src = avatarUrl;
+    avatarImg.alt = userName;
+    avatarImg.loading = 'lazy';
+    avatarLink.appendChild(avatarImg);
+    avatarWrap.appendChild(avatarLink);
+    article.appendChild(avatarWrap);
+
+    // ---- body
+    const body = document.createElement('div');
+    body.className = 'NestedReply-body';
+
+    // ---- header (author + time)
+    const header = document.createElement('header');
+    header.className = 'NestedReply-header';
+    const authorLink = document.createElement('a');
+    authorLink.className = 'NestedReply-author';
+    authorLink.href = userHref;
+    authorLink.textContent = userName;
+    header.appendChild(authorLink);
+
+    const timeLink = document.createElement('a');
+    timeLink.className = 'NestedReply-time';
+    timeLink.href = app.route.post(newReply);
+    const createdAt = typeof newReply.createdAt === 'function'
+      ? newReply.createdAt()
+      : new Date();
+    timeLink.title = createdAt.toLocaleString();
+    timeLink.textContent = createdAt.toLocaleString();
+    header.appendChild(timeLink);
+
+    body.appendChild(header);
+
+    // ---- content (HTML from the backend, same as m.trust in
+    // NestedReply.jsx — server has sanitized the markup).
+    const content = document.createElement('div');
+    content.className = 'NestedReply-content';
+    const contentHtml = typeof newReply.contentHtml === 'function'
+      ? newReply.contentHtml()
+      : '';
+    content.innerHTML = contentHtml || '<p></p>';
+    body.appendChild(content);
+
+    article.appendChild(body);
+    li.appendChild(article);
+
+    return li;
   }
 
   view() {
@@ -333,12 +576,13 @@ export default class NestedReplies extends Component {
             </Button>
           )}
 
-          <Button
-            className="Button Button--link NestedReplies-replyBtn"
-            onclick={() => this.toggleComposer()}
-          >
-            {app.translator.trans('ziven-post-comment.forum.post.reply')}
-          </Button>
+          {/* v0.1.0e: removed the visible "Reply" button. The composer is
+              now opened by clicking anywhere on the parent post card
+              (CommentPost) or the parent reply card (NestedReply) — a
+              小黑盒-style UX. The card-click handlers call this
+              component's `showComposer()` / `toggleComposer()` public
+              methods. The viewer's primary affordance for replying is
+              the card itself, not a separate button. */}
         </div>
 
         {/* Inline composer container — always in the DOM, but

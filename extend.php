@@ -12,12 +12,10 @@ namespace Ziven\PostComment;
 use Flarum\Api\Endpoint;
 use Flarum\Api\Resource;
 use Flarum\Extend;
-use Flarum\Post\Event\Saving;
 use Flarum\Post\Filter\PostSearcher;
 use Flarum\Post\Post;
 use Flarum\Search\Database\DatabaseSearchDriver;
 use Ziven\PostComment\Api\PostResourceFields;
-use Ziven\PostComment\Listener\RejectNestedReply;
 use Ziven\PostComment\Listener\SendNotificationWhenPostIsReplied;
 use Ziven\PostComment\Notification\PostCommentedBlueprint;
 use Ziven\PostComment\Provider\MigrationServiceProvider;
@@ -43,12 +41,27 @@ return [
         ->hasMany('replies', Post::class, 'parent_post_id'),
 
     // Add parentPost + repliesCount + isReply fields to PostResource
+    // v0.1.0e: include replies recursively up to 5 levels deep so the
+    // frontend can render an arbitrarily-nested reply tree without
+    // having to lazy-load each level on click. Each level includes its
+    // own `user` so the avatars / author names render without an extra
+    // roundtrip. We stop at 5 because (a) 5 levels is already past any
+    // realistic UX use case, and (b) deeper include trees bloat the
+    // payload quadratically — every level multiplies the row count by
+    // the average branching factor.
     (new Extend\ApiResource(Resource\PostResource::class))
         ->fields(PostResourceFields::class)
         ->endpoint(
             [Endpoint\Index::class, Endpoint\Show::class, Endpoint\Create::class, Endpoint\Update::class],
             function (Endpoint\Index|Endpoint\Show|Endpoint\Create|Endpoint\Update $endpoint): Endpoint\Endpoint {
-                return $endpoint->addDefaultInclude(['parentPost', 'parentPost.user', 'replies']);
+                return $endpoint->addDefaultInclude([
+                    'parentPost', 'parentPost.user',
+                    'replies', 'replies.user',
+                    'replies.replies', 'replies.replies.user',
+                    'replies.replies.replies', 'replies.replies.replies.user',
+                    'replies.replies.replies.replies', 'replies.replies.replies.replies.user',
+                    'replies.replies.replies.replies.replies', 'replies.replies.replies.replies.replies.user',
+                ]);
             }
         ),
 
@@ -69,10 +82,6 @@ return [
     // We listen for the `Posted` event (fired only on post creation, not edits).
     (new Extend\Event())
         ->listen(\Flarum\Post\Event\Posted::class, SendNotificationWhenPostIsReplied::class),
-
-    // Reject nested-of-nested replies at the API layer (A1 single-level guard).
-    (new Extend\Event())
-        ->listen(Saving::class, RejectNestedReply::class),
 
     // Search query support: ?filter[replyCount]=0 (posts with no replies)
     (new Extend\SearchDriver(DatabaseSearchDriver::class))

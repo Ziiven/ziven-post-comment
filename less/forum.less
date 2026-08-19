@@ -1,11 +1,17 @@
-// Ziven Post Comment — single-level nested replies
+// Ziven Post Comment — infinite-nesting nested replies (仿小黑盒)
 //
-// Visual language:
+// Visual language (v0.1.0e):
 //   - Top-level post with replies gets a subtle accent (left border accent
 //     on each reply to imply the thread).
 //   - Replies themselves collapse: first 3 visible, the rest hidden by
 //     max-height + overflow. A max-height animation provides the "smooth
 //     expand" feel.
+//   - The entire main-post card AND each nested reply card are
+//     clickable (cursor: pointer + hover effect) to open the inline
+//     reply composer (小黑盒-style "click anywhere on the card to
+//     reply" UX). The cursor / hover is suppressed inside links
+//     (a[href]) and the vendor Post-actions area so the user can
+//     still click on usernames / time / Like / vendor Reply.
 //   - Light + dark theme both supported via CSS variables matching Flarum's
 //     --primary-color / --control-bg tokens.
 
@@ -114,11 +120,58 @@
   border-radius: 6px;
   border: 1px solid var(--control-color, rgba(0, 0, 0, 0.06));
   transition: background 0.15s ease;
+  // v0.1.0e: the entire reply card is clickable to open the
+  // nested reply composer (小黑盒-style UX). We set cursor:pointer
+  // globally and override it back to the link/button cursor for
+  // the clickable sub-elements that should NOT trigger the
+  // composer toggle (anchors, vendor action buttons).
+  cursor: pointer;
+
+  &:hover {
+    background: var(--control-bg-hover, rgba(25, 118, 210, 0.04));
+  }
+  // Suppress the cursor on the inner clickable elements that
+  // should keep their own cursor / semantics. This is a
+  // CSS-only mirror of the JS exclusion list in
+  // NestedReply._handleCardClick — the JS list is the
+  // authoritative one (it can also call stopPropagation etc.),
+  // but the CSS is the visual cue for "this is a link, not
+  // a clickable card region".
+  a, a[href], button, .Button {
+    cursor: auto;
+  }
+  // Re-assert the pointer cursor for nested action buttons
+  // (vendor Post-actions style) that ARE pointer-cursor by
+  // default — keep them clickable.
+  a[href], button, .Button {
+    cursor: pointer;
+  }
 }
 
 [data-theme^="dark"] .NestedReply {
   background: var(--control-bg, rgba(255, 255, 255, 0.04));
   border-color: var(--control-color, rgba(255, 255, 255, 0.08));
+
+  &:hover {
+    background: var(--control-bg-hover, rgba(66, 165, 245, 0.06));
+  }
+}
+
+// v0.1.0e: indentation for the recursive .NestedReplies block
+// under each reply card. The recursive rendering lives in
+// .NestedReply-replies > .NestedReplies (see NestedReply.jsx
+// view()).
+.NestedReply-replies {
+  margin-top: 8px;
+  margin-left: 20px; // visual indent
+  flex: 0 0 100%; // wrap to a new line below the avatar+body row
+  // Reset the cursor back to auto on the nested replies container
+  // — the inner NestedReply / NestedReplies have their own
+  // cursor:pointer rule.
+  cursor: auto;
+}
+.NestedReply-replies .NestedReplies {
+  cursor: pointer;
 }
 
 .NestedReply-avatar {
@@ -188,45 +241,41 @@
   padding: 2px 6px;
 }
 
-// v0.1.0d: the "Reply" button that toggles the inline composer.
-// Same color as the parent-post's Reply action (`.Post-nestedReplyBtn`)
-// so the visual language is consistent.
-.NestedReplies-replyBtn {
-  color: @ziven-reply-accent;
-  font-weight: 500;
-  font-size: 13px;
-  margin-left: auto; // push to the right when other controls are present
-}
-
-[data-theme^="dark"] .NestedReplies-replyBtn {
-  color: @ziven-reply-accent-dark;
-}
+// v0.1.0e: removed `.NestedReplies-replyBtn` (the visible "Reply"
+// button that used to toggle the inline composer). The composer is
+// now opened by clicking the parent card (CommentPost or
+// NestedReply) — see `js/src/forum/index.js` (CommentPost
+// `oncreate` override) and `js/src/forum/components/NestedReply.jsx`
+// (`_handleCardClick` method). The CSS rules for `.NestedReplies-
+// replyBtn` are removed because no element with that class is
+// rendered anymore. (The class names `.Post-nestedReplyBtn` and
+// `.NestedReplies-replyBtn` are intentionally kept as "reserved"
+// — if a future version wants to bring back a visible button, the
+// CSS can be restored from git history without re-deriving the
+// class names.)
 
 // v0.1.0d Bug 3 fix: when the post has no nested replies yet AND the
 // composer is closed, the wrapper is rendered in `--empty` state
-// which collapses the controls row to just the Reply button (no View
-// N more / Collapse spacers, no list gap). The Reply button is
-// re-styled to look like a primary CTA so it's the obvious next step
-// for the user.
+// which collapses the controls row (no View N more / Collapse
+// spacers, no list gap). v0.1.0e: there are no controls to show in
+// the empty state — the visible "Reply" button is gone. The visual
+// is now "no replies yet" + the card-wide click affordance
+// (cursor:pointer from `.Post--nestedClickable` or
+// `.NestedReply`), with no dangling empty button.
+//
+// v0.1.0e: the visible "Reply" button has been removed (B1 — the
+// entire card is clickable now). The `--empty` state still has a
+// visible difference (no list, no controls row, just the empty
+// thread look), but the Reply-button-specific styling is gone. The
+// click-anywhere affordance is now signalled by the card-wide
+// cursor:pointer + the `--nestedClickable` class on the parent
+// CommentPost.
 .NestedReplies--empty .NestedReplies-controls {
   margin-top: 0;
-}
-.NestedReplies--empty .NestedReplies-replyBtn {
-  margin-left: 0;
-  background: @ziven-reply-accent;
-  color: #fff;
-  padding: 4px 12px;
-  border-radius: 4px;
-  transition: background 0.15s ease;
-  &:hover {
-    background: darken(@ziven-reply-accent, 8%);
-  }
-}
-[data-theme^="dark"] .NestedReplies--empty .NestedReplies-replyBtn {
-  background: @ziven-reply-accent-dark;
-  &:hover {
-    background: lighten(@ziven-reply-accent-dark, 6%);
-  }
+  // v0.1.0e: no controls to show in the empty state. Hide the
+  // controls container so the visual is "no replies yet" + the
+  // card-wide click affordance, with no dangling empty button.
+  display: none;
 }
 
 // ------------------------------------------------------------------
@@ -324,16 +373,73 @@
 }
 
 // ------------------------------------------------------------------
-// Action button (the "Reply" link on each top-level post)
+// v0.1.0e — removed `.Post-nestedReplyBtn` (the extension-defined
+// "Reply" action on the CommentPost's actionItems). The vendor
+// "Reply" link/button is preserved unchanged (C1) — see the
+// `js/src/forum/index.js` `actionItems` extension that no longer
+// adds the `nested-reply` action. CSS rules for
+// `.Post-nestedReplyBtn` are removed because no element with that
+// class is rendered anymore. (The class name is intentionally kept
+// as "reserved" — see the matching comment on
+// `.NestedReplies-replyBtn` above.)
 // ------------------------------------------------------------------
-.Post-nestedReplyBtn {
-  color: @ziven-reply-accent;
-  font-weight: 500;
-  font-size: 13px;
+
+// ------------------------------------------------------------------
+// v0.1.0e — Card-click affordance (CommentPost main card)
+// ------------------------------------------------------------------
+// The entire CommentPost `<article>` is clickable to open the
+// nested reply composer (小黑盒-style UX). The
+// `.Post--nestedClickable` class is added by index.js's
+// `elementAttrs` override on the main post (not on replies,
+// not on the discussion's first post). The hover effect is
+// subtle (a light tint) to communicate "this is clickable"
+// without competing with the post's own content.
+//
+// The cursor / hover is suppressed on the inner vendor
+// Post-actions area (so the Like / vendor Reply buttons keep
+// their own cursor) and on the inner NestedReplies / NestedReply
+// elements (which have their own click semantics and their own
+// cursor:pointer).
+.Post--nestedClickable {
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background-color: rgba(25, 118, 210, 0.025);
+  }
+  // Suppress the clickable-card cursor on the vendor
+  // Post-actions area so the Like / vendor Reply buttons
+  // retain their own pointer-cursor (which they already
+  // have — this just overrides the inherited `cursor:
+  // pointer` from the parent article).
+  .Post-actions, .Post-actions * {
+    cursor: auto;
+  }
+  // Re-assert pointer cursor for the actual clickable items
+  // inside Post-actions.
+  .Post-actions button, .Post-actions a, .Post-actions .Button {
+    cursor: pointer;
+  }
+  // The inner NestedReplies / NestedReply cards are themselves
+  // clickable, so the cursor should be pointer over them. The
+  // NestedReply's own :hover rule takes over the hover tint
+  // (slightly stronger than the parent article's tint).
+  .NestedReplies, .NestedReply, .NestedReplies * {
+    cursor: auto;
+  }
+  .NestedReplies, .NestedReply {
+    cursor: pointer;
+  }
+  .NestedReplies a, .NestedReply a, .NestedReplies button, .NestedReply button,
+  .NestedReplies .Button, .NestedReply .Button {
+    cursor: pointer;
+  }
 }
 
-[data-theme^="dark"] .Post-nestedReplyBtn {
-  color: @ziven-reply-accent-dark;
+[data-theme^="dark"] .Post--nestedClickable {
+  &:hover {
+    background-color: rgba(66, 165, 245, 0.04);
+  }
 }
 
 // ------------------------------------------------------------------

@@ -1,13 +1,34 @@
-// Ziven Post Comment — A1 single-level nested replies
+// Ziven Post Comment — infinite-nesting nested replies (仿小黑盒)
 //
-// Extends the core CommentPost to render a NestedReplies block underneath
-// each top-level comment, and add a "Reply" action that opens an inline
-// ReplyComposer for the nested reply.
+// v0.1.0e redesign (辉哥拍板 2026-08-19 14:35):
+//   - A2: replies are now infinite-nesting (a reply of a reply can
+//     itself be replied to, and so on). The previous A1 single-level
+//     guard (RejectNestedReply listener + addDefaultInclude
+//     "replies" only) is removed.
+//   - B1: the entire main-post card (CommentPost) is clickable to
+//     open the inline reply composer (a 小黑盒-style "click
+//     anywhere on the card to reply" UX). The vendor-supplied
+//     "Reply" link/button on the post is preserved (C1) and still
+//     uses vendor semantics for its reply flow.
+//   - C1: vendor's "Reply" link/button is preserved unchanged.
+//     Users can either click anywhere on the card OR use the
+//     vendor "Reply" button to enter the global reply flow.
+//   - D1: nested layers keep the v0.1.0d defaults (3 visible,
+//     "View N more" for the rest, no auto-load).
+//
+// Implementation: a native `click` listener on the CommentPost
+// `<article>` (SOP 207 / 208 — vendor Flarum 2.0's
+// SubtreeRetainer blocks mithril JSX `onclick` re-binding, so we
+// bind a native listener once in `oncreate` and rely on the DOM
+// node being stable until the parent re-renders the post list).
+// The listener excludes: anchors (let browser navigate), vendor
+// Post-actions (like / vendor reply), child NestedReplies /
+// NestedReply elements (each has its own card-click handler),
+// and the composer itself (let it handle its own input).
 
 import app from 'flarum/forum/app';
 import { extend, override } from 'flarum/common/extend';
 import CommentPost from 'flarum/forum/components/CommentPost';
-import Button from 'flarum/common/components/Button';
 import classList from 'flarum/common/utils/classList';
 
 import NestedReplies from './components/NestedReplies';
@@ -70,53 +91,109 @@ app.initializers.add('ziven-post-comment', () => {
     return children;
   });
 
-  // Add a "Reply" action to each top-level post. The actual inline composer
-  // lives inside <NestedReplies> and is toggled by the per-post "Reply"
-  // button. v0.1.0d: skip the first post of the discussion for the same
-  // reason as `content` above.
-  extend(CommentPost.prototype, 'actionItems', function (items) {
-    const post = this.attrs.post;
-
-    if (post.isReply() || post.isHidden() || post.number() === 1) {
-      return;
-    }
-
-    // Need to be logged in AND able to reply to the discussion.
-    if (!app.session.user || !post.discussion().canReply()) {
-      return;
-    }
-
-    items.add(
-      'nested-reply',
-      <Button
-        className="Button Button--link Post-nestedReplyBtn"
-        icon="fas fa-reply"
-        onclick={() => {
-          // Toggle the inline composer inside NestedReplies — scroll to
-          // it and focus the textarea. The composer is now hidden by
-          // default (v0.1.0d), so this also flips it open via the same
-          // event NestedReplies' own "Reply" button uses.
-          const $composer = this.$('.NestedReplies-replyBtn')[0];
-          if ($composer) $composer.click();
-        }}
-      >
-        {app.translator.trans('ziven-post-comment.forum.post.reply_link')}
-      </Button>,
-      -20 // place after the core "Reply" link
-    );
-  });
+  // v0.1.0e: removed the extension-defined "Reply" action on the
+  // CommentPost's actionItems (the old
+  // `items.add('nested-reply', <Button ...>)` block). The card is
+  // now clickable as a whole, and the vendor "Reply" link is
+  // preserved (C1). Removing the extension's "Reply" action avoids
+  // two redundant entry points into the same composer.
 
   // Override the elementAttrs to add `Post--hasReplies` when this post has
   // nested replies, so we can show an indicator (e.g. a left border).
   // v0.1.0d: also skip the first post — the starter post never gets the
   // `Post--hasReplies` accent (it has no NestedReplies block at all).
+  // v0.1.0e: also add `Post--nestedClickable` for any post that can
+  // host a NestedReplies (i.e. is not a reply, is not the first
+  // post), so the CSS can attach the cursor:pointer / hover effect
+  // precisely where the card-click handler will fire.
   override(CommentPost.prototype, 'elementAttrs', function (original) {
     const attrs = original();
     const post = this.attrs.post;
+    const canHostNested = !post.isReply() && post.number() !== 1;
     attrs.className = classList(attrs.className, {
-      'Post--hasReplies': !post.isReply() && post.number() !== 1 && post.repliesCount() > 0,
+      'Post--hasReplies': canHostNested && post.repliesCount() > 0,
+      'Post--nestedClickable': canHostNested,
     });
     return attrs;
+  });
+
+  // v0.1.0e: bind a native `click` listener on the CommentPost
+  // `<article>` to implement "click anywhere on the card to reply"
+  // (B1 in the v0.1.0e spec). The vendor-supplied "Reply" button
+  // is preserved (C1) and uses vendor semantics — this listener
+  // is the *additional* entry point into the same inline composer.
+  // The listener is bound natively (not via mithril JSX `onclick`)
+  // because vendor Flarum 2.0's `SubtreeRetainer` blocks
+  // CommentPost subtree re-renders, which would orphan any
+  // mithril-attached click handler. SOP 207 / 208 pattern.
+  override(CommentPost.prototype, 'oncreate', function (original, vnode) {
+    original(vnode);
+
+    const post = this.attrs.post;
+    // Only bind on top-level, non-first posts — these are the
+    // ones that actually host a NestedReplies block.
+    if (post.isReply() || post.number() === 1) {
+      return;
+    }
+
+    const article = vnode.dom;
+    if (!article || article.dataset.zpcCardClickBound) return;
+    article.dataset.zpcCardClickBound = '1';
+
+    const handler = (e) => {
+      if (!e || !e.target) return;
+      const t = e.target;
+
+      // Exclusion list (any match → bail out and let the
+      // click reach whatever is underneath):
+      //
+      // 1. Links — username / time / vendor action links must
+      //    still navigate.
+      if (t.closest && t.closest('a[href]')) return;
+
+      // 2. Vendor Post-actions (Like button, vendor Reply
+      //    button, etc.) — vendor has its own click semantics.
+      if (t.closest && t.closest('.Post-actions')) return;
+
+      // 3. NestedReplies / NestedReply children — each has its
+      //    own card-click handler (NestedReply.bindCardClick).
+      //    The child handler calls `stopPropagation()`, so this
+      //    is defensive, but it's the correct layering.
+      if (t.closest && t.closest('.NestedReplies, .NestedReply, .NestedReply-replies')) return;
+
+      // 4. The composer itself (if the user is typing in the
+      //    textarea) — let the composer handle its own clicks.
+      if (t.closest && t.closest('.NestedReplies-composer, .ReplyComposer')) return;
+
+      // ---- Open the composer on the post's NestedReplies ----
+      const nested = article.querySelector('.Post-nestedReplies .NestedReplies');
+      if (!nested) return;
+      const inst = nested.__zpcNestedReplies;
+      if (inst && typeof inst.toggleComposer === 'function') {
+        inst.toggleComposer();
+        e.stopPropagation();
+      }
+    };
+
+    article.addEventListener('click', handler);
+
+    // Stash the handler on the instance so the overridden
+    // `onremove` (below) can detach it cleanly.
+    this._zpcCardClickHandler = handler;
+  });
+
+  // Mirror `oncreate` with `onremove` to detach the native
+  // listener when the CommentPost is removed from the DOM
+  // (e.g. after a post merge / split or a full discussion
+  // re-fetch). Without this, removed CommentPosts would still
+  // hold a closure reference, leaking memory.
+  override(CommentPost.prototype, 'onremove', function (original, vnode) {
+    if (this._zpcCardClickHandler && vnode && vnode.dom) {
+      vnode.dom.removeEventListener('click', this._zpcCardClickHandler);
+      delete vnode.dom.dataset.zpcCardClickBound;
+      this._zpcCardClickHandler = null;
+    }
+    original(vnode);
   });
 
   // ---- Notification grid -------------------------------------------------
