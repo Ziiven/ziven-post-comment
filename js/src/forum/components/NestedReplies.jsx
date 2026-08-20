@@ -8,13 +8,16 @@
 //     主楼 (the containing `.PostStream-item`) aligns to the top
 //     of the viewport. 辉哥原话: "收起后 scroll 到楼中楼所属的
 //     那条评论" — 楼中楼所属主楼 PostStream-item 顶部.
-//   - The two buttons are MUTUALLY EXCLUSIVE in the expanded state:
-//     more to load → "展示更多" visible / "收起" hidden; expanded
-//     (visibleCount > 3) → "展示更多" hidden / "收起" visible.
-//     Both buttons are always present in the DOM; visibility is
-//     driven by `_applyButton()` toggling `style.display` directly
-//     (SOP 268 + 275 — vendor SubtreeRetainer blocks mithril
-//     redraws, and the CSS must not second-guess the JS state).
+//   - v0.1.0e.h.a 修 (辉哥 17:35 移动端亲测): "展示更多" 和
+//     "收起" 是 2 个 INDEPENDENT booleans, 不是互斥. 真理表:
+//     | visibleCount | totalCount | hasMore | isExpanded | loadMore | collapse |
+//     | 3            | 109        | true    | false      | visible  | hidden   |
+//     | 13           | 109        | true    | true       | visible  | visible  |  ← 1x 展开, 辉哥期望
+//     | 23           | 109        | true    | true       | visible  | visible  |
+//     | 109          | 109        | false   | true       | hidden   | visible  |  ← 全展开, 收起 仍可
+//   - 跟 小黑盒 评论区 UX 一致: 展开后能继续点 展示更多 (loop
+//     until exhausted), 同时 收起 一直 visible. v0.1.0e.h SOP 277
+//     互斥真理表错了 (Mavis 拍错), v0.1.0e.h.a 纠正.
 //   - The reply cache (`this.replies` array) is NOT cleared on
 //     collapse — items 4+ stay loaded so re-clicking "展示更多"
 //     is instant (no re-fetch needed).
@@ -468,32 +471,30 @@ export default class NestedReplies extends Component {
 
   _applyButton() {
     if (!this.buttonEl) return;
-    // v0.1.0e.h (辉哥 16:59 拍板): "展示更多" 和 "收起" 互斥显示.
-    // 两个按钮是 NOT 同屏共存 — 任一时刻只有一个 visible.
+    // v0.1.0e.h.a (辉哥 17:35 移动端亲测纠正): "展示更多" 和
+    // "收起" 是 2 个 INDEPENDENT booleans, 不是 SOP 277 的互斥
+    // 真理表. 真理表 (辉哥期望, 跟 小黑盒 UX 一致):
     //
-    // 规则:
-    //   - visibleCount === DEFAULT_PAGE_SIZE (3)  → 展示更多 visible / 收起 hidden
-    //     (default state, 跟 v0.1.0e.b 一样. 有 more 就显示 loadMore
-    //     按钮, 让用户能再加载)
-    //   - visibleCount > DEFAULT_PAGE_SIZE (展开后) → 展示更多 hidden / 收起 visible
-    //     (expanded state. 此时不管 hasMore=true/false, 都隐藏 loadMore,
-    //     因为 收起 接管了. 用户想看更多 → 先收起 → 再展示更多, 走
-    //     expand/collapse loop 模式)
+    //   | visibleCount | totalCount | hasMore | isExpanded | loadMore | collapse |
+    //   |--------------|------------|---------|------------|----------|----------|
+    //   | 3            | 109        | true    | false      | visible  | hidden   |  default
+    //   | 13           | 109        | true    | true       | visible  | visible  |  1x 展开 (辉哥 17:35 期望)
+    //   | 23           | 109        | true    | true       | visible  | visible  |  2x 展开
+    //   | 109          | 109        | false   | true       | hidden   | visible  |  全展开 (无 more 可加载)
     //
-    // 为什么不用 "hasMore" 单独决定 (v0.1.0e.b 的逻辑): v0.1.0e.b
-    // 的 "loop until exhausted" UX 跟 v0.1.0e.h 的 "expand/collapse
-    // loop" UX 互斥. 辉哥 16:59 明确选了后者 — 用户展开一次看
-    // 13 条, 想看更多就先收起, 再展开 (cached 3→13 → 收起 → 3 →
-    // 再展开 → 13). 这种 UX 跟 小黑盒 评论区 / 微博 评论区 一样.
+    // v0.1.0e.h 走 SOP 277 互斥真理表错了 (Mavis 拍错了), 实际
+    // 辉哥要的: 展开后还能继续 click 展示更多 (loop until
+    // exhausted), 同时 collapse 一直 visible. v0.1.0e.b 的
+    // "loop until exhausted" UX 跟 v0.1.0e.h 的 "收起" 是可以共
+    // 存的, 不是互斥 — 用户展开一次看 13, 想看更多可以继续 click
+    // 展示更多 (再 +10), 也可以点 收起 回 3, 两种操作都支持.
     //
     // Why this is safe: SOP 275 CSS-不-second-guess 模式, button
     // visibility 完全由 JS 控. CSS 只是 layout 样式 (font-size /
     // padding), 不写 visibility 规则.
-    const isExpanded = this.visibleCount > DEFAULT_PAGE_SIZE;
     const hasMore = this.visibleCount < this.totalCount;
-    // loadMore: only show in default state AND has more to load
-    this.buttonEl.style.display = (!isExpanded && hasMore) ? '' : 'none';
-    // collapse: only show when expanded
+    const isExpanded = this.visibleCount > DEFAULT_PAGE_SIZE;
+    this.buttonEl.style.display = hasMore ? '' : 'none';
     if (this.collapseEl) {
       this.collapseEl.style.display = isExpanded ? '' : 'none';
     }
