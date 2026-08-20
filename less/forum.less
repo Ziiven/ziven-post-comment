@@ -383,3 +383,132 @@
     font-size: 13px;
   }
 }
+
+// === 18. v0.1.0e.k 移动端 composer 改 fixed bottom (仿小黑盒, 辉哥 20:46 反馈) ===
+// 设计 v4 参考: /Users/zhaozihui/.mavis/agents/mavis/workspace/
+//   ziven-theme-composer-design/index.html + ziven-theme-aura-v4-{default,focused}.png
+// 范围: 移动端 (< 992px) 帖子页 composer, 桌面端保留 vendor 默认.
+// 配套: jsx 改 vendor Composer.view (zpc e.h.a SOP 271 + 280 实战模式).
+// 配套: ziven-theme-aura v0.2.5e.1 隐藏 DiscussionPage 移动端 .MobileTab
+//   (避免 composer 跟 mobile tab 撞, SOP 281 cascade 选型).
+.Composer {
+  @media (max-width: 991.98px) {
+    // 走 zpc e.k 标 className, 全 mobile 范围走固定 bottom + 黑底透明 + blur
+    // 跟设计 v4 一致: 仿小黑盒评论输入条
+    &.zpc-composer-mobile {
+      background: rgba(26, 26, 28, 0.85) !important;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border-top: 1px solid rgba(255, 255, 255, 0.06) !important;
+      box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.3) !important;
+      padding: 8px 12px !important;
+      padding-bottom: calc(8px + env(safe-area-inset-bottom, 0)) !important;
+
+      // 隐藏 vendor ComposerBody-avatar (mobile 不需要左侧头像)
+      .ComposerBody-avatar {
+        display: none !important;
+      }
+
+      // vendor ComposerBody-content 紧贴 left/right (去掉 avatar 空间)
+      .ComposerBody-content {
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      // 隐藏 vendor TextEditor-controls (我们 4 input-tool bar 自带 send 按钮)
+      .TextEditor-controls {
+        display: none !important;
+      }
+
+      // vendor Composer-handle 隐藏 (mobile 不需要拖拽手柄)
+      .Composer-handle {
+        display: none !important;
+      }
+    }
+  }
+}
+
+// 4 input-tool bar (mobile composer 底部)
+.zpc-composer-input-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 0 4px;
+}
+
+.zpc-composer-tool {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background 0.15s, color 0.15s;
+  padding: 0;
+
+  &:hover,
+  &:active {
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 1);
+  }
+
+  &--send {
+    margin-left: auto;
+    background: var(--primary-color, #3b82f6) !important;
+    color: #fff !important;
+    width: auto;
+    min-width: 60px;
+    padding: 0 14px;
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 600;
+    gap: 4px;
+
+    &:hover,
+    &:active {
+      background: var(--primary-color-hover, #2563eb) !important;
+      color: #fff !important;
+    }
+  }
+}
+
+// emoji 工具条 (mobile composer, 默认隐藏, focused 状态显示)
+.zpc-composer-emoji-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 0;
+  margin-top: 4px;
+  overflow-x: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.zpc-composer-emoji {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0;
+
+  &:hover,
+  &:active {
+    background: rgba(255, 255, 255, 0.08);
+  }
+}

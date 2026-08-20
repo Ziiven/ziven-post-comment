@@ -369,4 +369,203 @@ app.initializers.add('ziven-post-comment', () => {
       if (Cls) stripTimeGap(Cls);
     });
   }
+
+  // ---- v0.1.0e.k: Composer view() — 移动端改 fixed bottom (仿小黑盒) ----
+  // 辉哥 20:46 反馈: 移动端 (< 992px) 帖子页 composer 改 fixed bottom 仿小黑盒风格.
+  // 范围: 只 DiscussionPage 移动端 composer, 桌面端保留 vendor 默认.
+  // 设计 v4 (辉哥 20:14 确认): /Users/zhaozihui/.mavis/agents/mavis/workspace/
+  //   ziven-theme-composer-design/index.html + ziven-theme-aura-v4-{default,focused}.png
+  //   - 移动端 composer 80px (default) / 140px (focused) 高度
+  //   - 黑底透明 + backdrop-filter: blur(20px)
+  //   - 4 input-tool (表情 / 上传图片 / @用户 / 发送按钮) 在底部
+  //   - emoji 工具条 (8 个常用 emoji)
+  //
+  // 实现策略 (跟 e.d 实战一致, SOP 271 + 280):
+  //   1. override vendor Composer.view (chunk 366, module 8139, lazy chunk,
+  //      SOP 280 走 flarum.reg.onLoad 拿 class, 不能直接 import)
+  //   2. 防御性 super-call: original() 拿 vendor vnode, 桌面端直接 return
+  //   3. 移动端 (< 992px): 重写 vnode, 加 className 'zpc-composer-mobile' +
+  //      隐藏 .Composer-controls (minimize/fullScreen/close) +
+  //      追加 4 input-tool bar + emoji bar 在 children 末尾
+  //   4. 不动 vendor ComposerBody / TextEditor 内部, 走 CSS less 改 4 input-tool 样式
+  //   5. 4 input-tool 的 send 按钮调 vendor composer.onsubmit() 实例方法 (zpc
+  //      e.h.a 已经接管 vendor onsubmit 加 parentPost 关系, 自动兼容)
+  //
+  // 风险 (e.d SOP 271 防御性 super-call 已沉淀):
+  //   - vendor Composer 在 mobile 走 'normal' position, 我们隐藏 Composer-controls
+  //     后用户不能 minimize. 辉哥 20:00 明确: 移动端只 fixed bottom 不动其他
+  //     UI 状态, 接受这个 trade-off
+  //   - vendor ComposerBody-avatar (左侧头像) 走 CSS 隐藏 (less 改)
+  //   - vendor TextEditor-controls 走 CSS 隐藏 (less 改, 我们的 4 input-tool
+  //     bar 自带 send 按钮, 跟 vendor Composer.onsubmit 同步)
+  const isMobile = () => typeof window !== 'undefined' && window.innerWidth < 992;
+
+  const ZpcMobileComposerBar = (composer) => {
+    // 4 个 input-tool: 表情 / 上传图片 / @用户 / 发送按钮
+    // 行为:
+    //   - emoji: 触发 vendor TextEditor-toolbar 内 emoji button (fof/emoji 装了才有)
+    //   - upload: 触发 fof/upload button (fof/upload 装了才有, 没装就静默)
+    //   - mention: focus vendor TextEditor + 在末尾插入 @
+    //   - send: 调 vendor composer.onsubmit() 实例方法, 走 e.h.a 路径
+    //     (vendor ComposerBody.onsubmit, e.h.a 已接管加 parentPost 关系)
+    if (!composer) return null;
+    const composerEl = () => composer?.element || document.querySelector('.Composer.active.visible');
+    const triggerVendorButton = (selector) => {
+      const el = composerEl()?.querySelector?.(selector);
+      if (el) el.click();
+    };
+    return m(
+      'div',
+      { className: 'zpc-composer-input-tools' },
+      m(
+        'button',
+        {
+          className: 'zpc-composer-tool zpc-composer-tool--emoji',
+          type: 'button',
+          title: '表情',
+          onclick: (e) => {
+            e.preventDefault();
+            triggerVendorButton('.TextEditor-toolbar .Button--icon');
+          },
+        },
+        m('i', { className: 'fas fa-face-smile' })
+      ),
+      m(
+        'button',
+        {
+          className: 'zpc-composer-tool zpc-composer-tool--upload',
+          type: 'button',
+          title: '图片',
+          onclick: (e) => {
+            e.preventDefault();
+            // fof/upload button 走 vendor: 找 .TextEditor-toolbar 里的 upload button
+            triggerVendorButton('.TextEditor-toolbar .Button--icon[title*="图片"], .TextEditor-toolbar .Button--icon[aria-label*="upload"], .TextEditor-toolbar .Button--icon[aria-label*="Upload"]');
+          },
+        },
+        m('i', { className: 'fas fa-image' })
+      ),
+      m(
+        'button',
+        {
+          className: 'zpc-composer-tool zpc-composer-tool--mention',
+          type: 'button',
+          title: '@用户',
+          onclick: (e) => {
+            e.preventDefault();
+            // focus vendor TextEditor + 模拟插入 @
+            const editor = composerEl()?.querySelector?.('.TextEditor-editorContainer textarea, .TextEditor-editor');
+            if (editor) {
+              editor.focus();
+              const newContent = (composer?.composer?.fields?.content() || '') + '@';
+              if (composer?.composer?.fields?.content) {
+                composer.composer.fields.content(newContent);
+              }
+            }
+          },
+        },
+        m('i', { className: 'fas fa-at' })
+      ),
+      m(
+        'button',
+        {
+          className: 'zpc-composer-tool zpc-composer-tool--send',
+          type: 'button',
+          title: '发送',
+          onclick: (e) => {
+            e.preventDefault();
+            // 调 vendor composer.onsubmit() 实例方法
+            // 走 vendor ComposerBody.onsubmit, zpc e.h.a 已接管加 parentPost 关系
+            try {
+              if (composer && typeof composer.onsubmit === 'function') {
+                composer.onsubmit(e);
+              }
+            } catch (err) {
+              // 静默 fail, 走 vendor 默认 submit
+            }
+          },
+        },
+        m('i', { className: 'fas fa-paper-plane' })
+      )
+    );
+  };
+
+  const ZpcMobileEmojiBar = () => {
+    // 8 个常用 emoji (辉哥设计 v4)
+    const emojis = ['😀', '😂', '😍', '👍', '👏', '🎉', '🔥', '❤️'];
+    return m(
+      'div',
+      { className: 'zpc-composer-emoji-bar' },
+      ...emojis.map((e) =>
+        m(
+          'button',
+          {
+            className: 'zpc-composer-emoji',
+            type: 'button',
+            onclick: (ev) => {
+              ev.preventDefault();
+              // 在末尾插入 emoji, 触发 vendor composer.fields.content 同步
+              const composerEl = document.querySelector('.Composer.active.visible');
+              if (!composerEl) return;
+              const textarea = composerEl.querySelector('.TextEditor-editorContainer textarea, .TextEditor-editor');
+              if (!textarea) return;
+              const newValue = (textarea.value || '') + e;
+              const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLTextAreaElement.prototype,
+                'value'
+              ).set;
+              nativeInputValueSetter.call(textarea, newValue);
+              textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            },
+          },
+          e
+        )
+      )
+    );
+  };
+
+  const transformComposerVnode = (vnode, composer) => {
+    // 改 vnode.attrs.className 加 'zpc-composer-mobile'
+    if (vnode && vnode.attrs) {
+      vnode.attrs.className = ((vnode.attrs.className || '') + ' zpc-composer-mobile').trim();
+    }
+    // 隐藏 vendor .Composer-controls (minimize/fullScreen/close 在 mobile 不用)
+    if (vnode && Array.isArray(vnode.children)) {
+      vnode.children.forEach((child) => {
+        if (
+          child &&
+          child.attrs &&
+          typeof child.attrs.className === 'string' &&
+          child.attrs.className.indexOf('Composer-controls') !== -1
+        ) {
+          // 隐藏
+          child.attrs.style = (child.attrs.style || '') + 'display:none;';
+        }
+      });
+      // 追加 zpc input-tool bar + emoji bar 在 children 末尾
+      vnode.children.push(ZpcMobileComposerBar(composer));
+      vnode.children.push(ZpcMobileEmojiBar());
+    }
+    return vnode;
+  };
+
+  if (flarumReg) {
+    flarumReg.onLoad('core', 'forum/components/Composer', (mod) => {
+      const Composer = (mod && mod.default) ? mod.default : mod;
+      if (!Composer) return;
+      // Idempotent: 多次 init 不叠加 extend
+      if (Composer.prototype.__zpcMobileComposed) return;
+      Composer.prototype.__zpcMobileComposed = true;
+
+      override(Composer.prototype, 'view', function (original) {
+        // 防御性 super-call: vendor view() 通常返 vnode, 保留 result 以防万一
+        const vnode = original ? original.call(this) : null;
+        if (!isMobile()) {
+          // 桌面端: 走 vendor 默认, 不变
+          return vnode;
+        }
+        // 移动端: 改 vnode (className + 隐藏 controls + 加 zpc bar)
+        return transformComposerVnode(vnode, this);
+      });
+    });
+  }
 });
