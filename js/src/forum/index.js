@@ -34,6 +34,22 @@ import NestedReplyComposer from './components/NestedReplyComposer';
 // (the existing Post model only has discussion / user / etc.).
 import Post from 'flarum/common/models/Post';
 
+// v0.1.0e.j (辉哥亲测 2026-08-20 18:32 移动端): vendor Flarum 2.0
+// `PostStream` is a lazy-loaded chunk (vendor/forum.js:
+//   flarum.reg.addChunkModule(158, 3038, "core", "forum/components/PostStream"))
+// so it cannot be statically `import`ed — the chunk isn't loaded until the
+// user navigates to a discussion page. We use the
+// `flarum.reg.get` + `onLoad` async pattern (SOP 250) to fetch the
+// class after the chunk is registered. If the chunk is already
+// available (e.g. when the user is currently on a discussion page),
+// `get()` returns the class directly; otherwise we wait for `onLoad`.
+// Once we have the class, we extend its `view()` to filter out the
+// `<div class="PostStream-timeGap">` element (and any descendants)
+// that vendor renders between posts that are more than 4 days apart.
+// The text content inside the timeGap ("8 天 后" / "10 天 后" / etc.)
+// is purely visual and not part of any post — 辉哥 explicitly
+// requested it be removed (not CSS-hidden) from the discussion page.
+
 app.initializers.add('ziven-post-comment', () => {
   // ---- Model extension ---------------------------------------------------
   // `parentPost` and `replies` are ToOne/ToMany relationships; the field
@@ -239,4 +255,118 @@ app.initializers.add('ziven-post-comment', () => {
       label: app.translator.trans('ziven-post-comment.forum.settings.notify_post_commented_label'),
     });
   });
+
+  // ---- PostStream view() — remove vendor PostStream-timeGap ---------------
+  // v0.1.0e.j (辉哥亲测 2026-08-20 18:32 移动端): vendor Flarum 2.0 inserts
+  // a `<div class="PostStream-timeGap">` between two posts when the
+  // previous one was created more than 4 days ago
+  // (vendor/flarum/core/js/src/forum/components/PostStream.js:64-72). The
+  // visible text is rendered via
+  //   `app.translator.trans('core.forum.post_stream.time_lapsed_text',
+  //     { period: dayjs().add(dt, 'ms').fromNow(true) })`
+  // which yields strings like "8 天 后" / "10 天 后" in zh-Hans. 辉哥
+  // asked to remove this — it is purely decorative (no per-post
+  // semantic value, no zpc feature references it) and is misleading
+  // on discussion pages with old + new posts.
+  //
+  // We use `extend()` (mutator pattern, SOP 271) to walk the vnode tree
+  // returned by vendor `PostStream.view()` and remove any element
+  // whose `className` contains `PostStream-timeGap`. We do NOT use
+  // `override()` because we want to *augment* the returned vnode, not
+  // rebuild it. We also do NOT use CSS (`display: none`) because
+  // 辉哥 explicitly asked for "真移除" — the element should not exist
+  // in the DOM at all.
+  //
+  // PostStream is a lazy-loaded chunk (chunk 158, module 3038). It
+  // CANNOT be statically `import`ed (webpack would compile to
+  // `flarum.reg.get(...)` which returns a Promise, not a class, until
+  // the chunk is loaded). SOP 250 pattern: use the webpack runtime
+  // (or `flarum.reg._webpack_runtimes`) to load the chunk and grab the
+  // class. The runtime is exposed on `flarum.reg` (it's how
+  // webpack-internal chunks coordinate with Flarum's registry) — see
+  // SOP 256 (which solved a near-identical issue for SignUpModal in
+  // ziven-core v0.5.2: `wr.e(559); const mod = await wr(9509);`).
+  //
+  // Why not `flarum.reg.onLoad(namespace, id, cb)`? Because that
+  // callback only fires for modules that go through `flarum.reg.add`
+  // (synchronous registrations). For modules registered via
+  // `addChunkModule` (lazy webpack chunks), `onLoad` queues the
+  // callback but never fires — there's no `add()` call after the
+  // webpack chunk loads. The first Puppeteer probe confirmed:
+  //   `isStripped: false` even after the discussion page rendered,
+  // because the queued `onLoad` callback never fired.
+  const flarumReg = (typeof window !== 'undefined' && window.flarum && window.flarum.reg) || (typeof flarum !== 'undefined' && flarum.reg) || null;
+  const stripTimeGap = (Cls) => {
+    if (!Cls) return;
+    // Idempotent: only attach once per class. (Subsequent initializer
+    // runs — e.g. via HMR — would otherwise stack the `extend`.)
+    if (Cls.prototype.__zpcTimeGapStripped) return;
+    Cls.prototype.__zpcTimeGapStripped = true;
+
+    extend(Cls.prototype, 'view', function (vnode) {
+      // vendor PostStream.view() returns the root <div class="PostStream">,
+      // with `children` = the array of PostStream-item vnodes. Each item
+      // vnode in turn has `children` = [<div.PostStream-timeGap>?,
+      // <article.CommentPost>, <div.Post-quoteButtonContainer>].
+      // We strip the timeGap in place.
+      if (vnode && Array.isArray(vnode.children)) {
+        vnode.children.forEach((item) => {
+          if (
+            item &&
+            Array.isArray(item.children) &&
+            item.attrs &&
+            typeof item.attrs.className === 'string' &&
+            item.attrs.className.indexOf('PostStream-item') !== -1
+          ) {
+            item.children = item.children.filter((grandchild) => {
+              if (
+                grandchild &&
+                grandchild.attrs &&
+                typeof grandchild.attrs.className === 'string' &&
+                grandchild.attrs.className.indexOf('PostStream-timeGap') !== -1
+              ) {
+                return false;
+              }
+              return true;
+            });
+          }
+        });
+      }
+      return vnode;
+    });
+  };
+
+  if (flarumReg) {
+    // v0.1.0e.j.2: `flarum.reg.onLoad(ns, id, callback)` is the
+    // canonical way to receive a class once it's been registered.
+    // For SYNC registrations (vendor `add()`), the callback fires
+    // immediately. For CHUNK registrations (vendor `addChunkModule`),
+    // the callback fires when the webpack chunk loads AND the
+    // module's `add` call runs (verified in
+    // vendor/forum.js:onLoad's minified body — it checks
+    // `moduleExports.has(t) && moduleExports.get(t).has(e)`, fires
+    // synchronously if so, otherwise queues; the queue is drained
+    // by `add()` after the chunk loads and registers the module).
+    //
+    // Previous attempts failed because:
+    //   (a) `flarum.reg.get(...)` returns the webpack module
+    //       factory FUNCTION (with `$$reentrantLock$$`) for lazy
+    //       chunks — calling it as `factory()` throws
+    //       "Class constructor P cannot be invoked without 'new'".
+    //   (b) `moduleExports.get(...).get(...)` returns undefined
+    //       before the chunk loads.
+    //   (c) Calling `stripTimeGap` on the factory function (truthy)
+    //       sets `__zpcTimeGapStripped` on the factory, not the
+    //       class — so the `if (Cls.prototype.__zpcTimeGapStripped)`
+    //       guard later lets the real class go through the no-op
+    //       path silently.
+    //
+    // `onLoad` solves all three: it fires exactly once, with the
+    // actual class as the argument, after the chunk has registered
+    // via `add()`.
+    flarumReg.onLoad('core', 'forum/components/PostStream', (mod) => {
+      const Cls = (mod && mod.default) ? mod.default : mod;
+      if (Cls) stripTimeGap(Cls);
+    });
+  }
 });
