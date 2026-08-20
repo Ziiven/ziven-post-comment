@@ -180,9 +180,21 @@ function applyExtends(ReplyComposerClass) {
       setTimeout(() => {
         const fire = (appEvents) => {
           if (app.store && typeof app.store.find === 'function') {
+            // v0.1.0e.f: switched from `?filter[parent]=` to
+            // `?filter[ziven-post-comment:replies]=` so the
+            // backend's `TopLevelOnlyScope` global Eloquent
+            // scope (added in this commit) is explicitly removed
+            // before applying the `where('parent_post_id', '=',
+            // parentId)` constraint. With the old
+            // `?filter[parent]=`, the global `whereNull` ANDs
+            // the explicit `= parentId` into an empty set, and
+            // the store warmup would no longer prime the
+            // `NestedReplies.jsx` `getById('posts', ...)` cache
+            // for the children. The new filter returns the
+            // actual children. See `RepliesFilter.php`.
             app.store
               .find('posts', {
-                filter: { parent: parentPost.id() },
+                filter: { 'ziven-post-comment:replies': parentPost.id() },
                 include: 'user',
               })
               .then(() => {

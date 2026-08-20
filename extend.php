@@ -24,13 +24,31 @@ use Ziven\PostComment\Listener\RejectNestedReply;
 use Ziven\PostComment\Listener\SendNotificationWhenPostIsReplied;
 use Ziven\PostComment\Notification\PostCommentedBlueprint;
 use Ziven\PostComment\Provider\MigrationServiceProvider;
+use Ziven\PostComment\Provider\PostModelScopeProvider;
 use Ziven\PostComment\Query\ParentFilter;
+use Ziven\PostComment\Query\RepliesFilter;
 use Ziven\PostComment\Query\ReplyCount;
 
 return [
     // Migration service provider (so `flarum migrate` picks up our migration files)
     (new Extend\ServiceProvider())
         ->register(MigrationServiceProvider::class),
+
+    // v0.1.0e.f: attach zpc `TopLevelOnlyScope` global Eloquent
+    // scope to the `Post` model. After this runs, every Post
+    // query (including the vendor PostIndex endpoint's) is
+    // automatically constrained to `parent_post_id IS NULL`
+    // (top-level / 主楼). Callers that want to bypass the
+    // scope (e.g. zpc's `NestedReplies.jsx` fetching the
+    // children of a parent post) must use the dedicated
+    // `?filter[ziven-post-comment:replies]=N` filter (registered
+    // below) which calls `withoutGlobalScope()`.
+    //
+    // The provider runs after vendor `Post::booted()` (which
+    // attaches `RegisteredTypesScope`), so both scopes compose
+    // with AND: vendor type filter + zpc top-level filter.
+    (new Extend\ServiceProvider())
+        ->register(PostModelScopeProvider::class),
 
     // Frontend
     (new Extend\Frontend('forum'))
@@ -41,9 +59,35 @@ return [
     new Extend\Locales(__DIR__.'/locale'),
 
     // Model relations: parent_post_id belongsTo + hasMany replies
+    //
+    // v0.1.0e.f: the `replies` relationship must bypass the
+    // `TopLevelOnlyScope` global Eloquent scope, otherwise
+    // `countRelation('replies')` in PostResourceFields returns
+    // 0 for every post (the vanilla `hasMany(Post::class,
+    // 'parent_post_id')` composes with the global `whereNull` into
+    // `parent_post_id = X AND parent_post_id IS NULL`, which is
+    // always empty). The frontend reads `repliesCount` to decide
+    // whether to render the "展示更多" button under a 主楼
+    // (and to render the NestedReplies container at all). A
+    // zero count would silently hide every 主楼's nested replies.
+    //
+    // We use `Extend\Model::relationship` with a closure (instead
+    // of the convenience `->hasMany(...)`) so we can chain
+    // `->withoutGlobalScope(TopLevelOnlyScope::class)` on the
+    // resulting HasMany relation. Laravel's `Relation::__call`
+    // forwards the call to the underlying Eloquent Builder, so
+    // the global scope is correctly removed for any query that
+    // traverses this relationship (count, get, paginate, etc.).
+    //
+    // This is consistent with `RepliesFilter::filter()` which
+    // also calls `withoutGlobalScope(TopLevelOnlyScope::class)`
+    // on the search-state query.
     (new Extend\Model(Post::class))
         ->belongsTo('parentPost', Post::class, 'parent_post_id')
-        ->hasMany('replies', Post::class, 'parent_post_id'),
+        ->relationship('replies', function (Post $post) {
+            return $post->hasMany(Post::class, 'parent_post_id')
+                ->withoutGlobalScope(\Ziven\PostComment\Query\TopLevelOnlyScope::class);
+        }),
 
     // Add parentPost + repliesCount + isReply fields to PostResource.
     // v0.1.0e.b design (辉哥拍板 2026-08-19 20:49):
@@ -113,6 +157,21 @@ return [
     // Filter: ?filter[parent]=null for top-level, ?filter[parent]=123 for a given post's replies
     (new Extend\SearchDriver(DatabaseSearchDriver::class))
         ->addFilter(PostSearcher::class, ParentFilter::class),
+
+    // v0.1.0e.f: RepliesFilter — zpc's way to fetch the nested
+    // REPLIES of a parent post. The existing `ParentFilter`
+    // (`?filter[parent]=N`) composes with the new
+    // `TopLevelOnlyScope` global scope into
+    // `parent_post_id IS NULL AND parent_post_id = N` — that
+    // intentionally returns zero rows. `RepliesFilter` uses a
+    // different filter key (`ziven-post-comment:replies`) and
+    // explicitly removes the `TopLevelOnlyScope` before applying
+    // the `where('parent_post_id', '=', N)` constraint, so the
+    // SQL becomes `parent_post_id = N` and the children of
+    // post N are returned. Used by `NestedReplies.jsx` for the
+    // 3-default + 10-load-more lazy load.
+    (new Extend\SearchDriver(DatabaseSearchDriver::class))
+        ->addFilter(PostSearcher::class, RepliesFilter::class),
 
     // Register reply notification
     (new Extend\Notification())

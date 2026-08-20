@@ -25,11 +25,18 @@
 //     原生 composer, 不是 zpc 自加的 inline composer".)
 //
 // Backed by:
-//   - API: `?filter[parent]=X` via the zpc ParentFilter (see
-//     src/Query/ParentFilter.php) — vendor PostSearcher gets a
-//     custom filter so a request like
-//     `?filter[parent]=6&page[offset]=0&page[limit]=3` returns the
-//     first 3 children of post 6, ordered by created_at ASC.
+//   - API: `?filter[ziven-post-comment:replies]=X` via the zpc
+//     RepliesFilter (see src/Query/RepliesFilter.php, added in
+//     v0.1.0e.f). vendor PostSearcher gets a custom filter so a
+//     request like
+//     `?filter[ziven-post-comment:replies]=6&page[offset]=0&page[limit]=3`
+//     returns the first 3 children of post 6, ordered by
+//     created_at ASC. The dedicated filter is needed because the
+//     `TopLevelOnlyScope` global Eloquent scope (also added in
+//     v0.1.0e.f) constrains all Post queries to top-level
+//     (parent_post_id IS NULL); RepliesFilter explicitly removes
+//     that scope before applying its `where('parent_post_id', '=',
+//     X)` constraint.
 //   - The repliesCount is already on every parent post (from
 //     PostResourceFields::repliesCount via `countRelation`). It's
 //     our source of truth for "are there more to load?".
@@ -87,7 +94,12 @@ export default class NestedReplies extends Component {
     // default-includes `replies` in the posts payload (D2 辉哥
     // 20:49), so the parent post's `replies` relationship is
     // empty in the initial payload anyway. We always lazy-load
-    // via `?filter[parent]=X&page[offset]=0&page[limit]=3`.
+    // via `?filter[ziven-post-comment:replies]=X&page[offset]=0&page[limit]=3`
+    // (v0.1.0e.f: switched from `?filter[parent]=` to
+    // `?filter[ziven-post-comment:replies]=` so the backend's
+    // `TopLevelOnlyScope` global scope is explicitly removed for
+    // this query — see `RepliesFilter` for the matching
+    // handler).
     this.replies = [];
 
     // The number of items in `this.replies` that should be
@@ -200,7 +212,7 @@ export default class NestedReplies extends Component {
 
   /**
    * Fetch a page of nested replies. Calls
-   *   GET /api/posts?filter[parent]=<parentId>&sort=createdAt
+   *   GET /api/posts?filter[ziven-post-comment:replies]=<parentId>&sort=createdAt
    *        &include=user&page[offset]=<offset>&page[limit]=<limit>
    * and appends the returned models to `this.replies`. After the
    * fetch, `this.visibleCount` is bumped to the new total, the
@@ -226,7 +238,16 @@ export default class NestedReplies extends Component {
 
     const parentId = this.parentPost.id();
     const params = {
-      filter: { parent: parentId },
+      // v0.1.0e.f: use `ziven-post-comment:replies` instead of
+      // `parent` so the backend's `TopLevelOnlyScope` global
+      // Eloquent scope is explicitly removed before applying the
+      // `where('parent_post_id', '=', parentId)` constraint. With
+      // the old `?filter[parent]=N`, the global `whereNull` ANDs
+      // the explicit `= N` into an empty set, and NestedReplies
+      // would render 0 items. The new filter returns the actual
+      // children. See `src/Query/RepliesFilter.php` for the
+      // matching backend handler.
+      filter: { 'ziven-post-comment:replies': parentId },
       sort: 'createdAt',
       include: 'user',
       page: { offset, limit },
