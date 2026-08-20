@@ -396,6 +396,15 @@
     // 走 zpc e.k 标 className, 全 mobile 范围走固定 bottom + 黑底透明 + blur
     // 跟设计 v4 一致: 仿小黑盒评论输入条
     &.zpc-composer-mobile {
+      // 必显式 position: fixed, 原因是 vendor Composer @media @phone 段
+      // (shim 后等于 @media (max-width: 767px)) 在 768-991 iPad portrait
+      // 范围不匹配, 不会设 position: fixed. 我们的 zpc 范围 0-991 必显式
+      // 设 position, 避免 768-991 vendor 默认 static 让 composer 在 viewport 中
+      position: fixed !important;
+      bottom: 0 !important;
+      left: 0 !important;
+      right: 0 !important;
+      z-index: var(--zindex-composer, 1000) !important;
       background: rgba(26, 26, 28, 0.85) !important;
       backdrop-filter: blur(20px);
       -webkit-backdrop-filter: blur(20px);
