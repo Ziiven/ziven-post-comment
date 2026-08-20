@@ -1,6 +1,24 @@
 // NestedReplies — renders a list of nested replies under a top-level
 // post, with a "展示更多" lazy-load button.
 //
+// v0.1.0e.h design (辉哥拍板 2026-08-20 16:59):
+//   - "收起" button (mirrors "展示更多"): only visible when the
+//     user has expanded past DEFAULT_PAGE_SIZE (3). Click → visible
+//     count resets to 3, AND the page smooth-scrolls so the parent
+//     主楼 (the containing `.PostStream-item`) aligns to the top
+//     of the viewport. 辉哥原话: "收起后 scroll 到楼中楼所属的
+//     那条评论" — 楼中楼所属主楼 PostStream-item 顶部.
+//   - The two buttons are MUTUALLY EXCLUSIVE in the expanded state:
+//     more to load → "展示更多" visible / "收起" hidden; expanded
+//     (visibleCount > 3) → "展示更多" hidden / "收起" visible.
+//     Both buttons are always present in the DOM; visibility is
+//     driven by `_applyButton()` toggling `style.display` directly
+//     (SOP 268 + 275 — vendor SubtreeRetainer blocks mithril
+//     redraws, and the CSS must not second-guess the JS state).
+//   - The reply cache (`this.replies` array) is NOT cleared on
+//     collapse — items 4+ stay loaded so re-clicking "展示更多"
+//     is instant (no re-fetch needed).
+//
 // v0.1.0e.b design (辉哥拍板 2026-08-19 20:49):
 //   - DEFAULT 3: when the component mounts, the FIRST page of 3
 //     nested replies is loaded from the API and rendered inline.
@@ -129,6 +147,9 @@ export default class NestedReplies extends Component {
     this.listEl = vnode.dom && vnode.dom.querySelector('.NestedReplies-list');
     this.buttonEl = vnode.dom
       ? vnode.dom.querySelector('.NestedReplies-loadMore')
+      : null;
+    this.collapseEl = vnode.dom
+      ? vnode.dom.querySelector('.NestedReplies-collapse')
       : null;
     this.loadingEl = vnode.dom
       ? vnode.dom.querySelector('.NestedReplies-loading')
@@ -306,6 +327,62 @@ export default class NestedReplies extends Component {
   }
 
   /**
+   * v0.1.0e.h (辉哥 16:59): "收起" button click handler.
+   * Collapses the expanded reply list back to the initial
+   * DEFAULT_PAGE_SIZE visible items, and scrolls the page so the
+   * parent 主楼 (the `PostStream-item` containing this NestedReplies)
+   * is aligned to the top of the viewport.
+   *
+   * Why scroll to the parent 主楼 (not the NestedReplies itself, not
+   * the page top):
+   *   辉哥 16:59 原话: "收起后 scroll 到楼中楼所属的那条评论" — 那条
+   *   评论 = 楼中楼所属主楼 PostStream-item, 不是 page 顶部, 不是
+   *   NestedReplies 容器. Reason: NestedReplies 容器可能比 viewport
+   *   长, 如果 scroll 到容器顶部用户会看到中间而不是主楼. 滚到
+   *   PostStream-item 顶部保证用户看到的是"主楼 + 3 条楼中楼",
+   *   跟"展示更多"前状态一致 (主楼成为视觉焦点).
+   *
+   * Scroll behavior: `block: 'start'` (align to top of viewport)
+   * + `behavior: 'smooth'` (animated scroll, 浏览器原生). 原生
+   * DOM API, 不受 vendor SubtreeRetainer 拦 mithril redraw 影响.
+   *
+   * visibleCount 重置逻辑:
+   *   - 重置回 DEFAULT_PAGE_SIZE (3), 不是 0
+   *   - `_render()` 会按 visibleCount=3 重渲, items 4-13 设
+   *     `style.display = 'none'`
+   *   - this.replies 数组**不**清空 — 缓存所有 loaded items,
+   *     下次"展示更多"可以无延迟 expand (不需要重 fetch)
+   *   - button 状态: loadMore visible (visibleCount < totalCount),
+   *     collapse hidden (visibleCount === DEFAULT_PAGE_SIZE)
+   */
+  collapse() {
+    if (this.loading) return;
+    this.visibleCount = DEFAULT_PAGE_SIZE;
+    this._render();
+
+    // Scroll the page so the parent 主楼 PostStream-item aligns to
+    // the top of the viewport. Use closest('.PostStream-item')
+    // to find the containing 主楼 DOM element — the NestedReplies
+    // component is mounted INSIDE the 主楼's .PostStream-item
+    // (not a sibling), so `closest()` walks up the tree.
+    //
+    // Defensive: if `wrapperEl` is null (component not yet
+    // mounted) or the closest PostStream-item doesn't exist
+    // (data structure changed), silently skip the scroll.
+    if (this.wrapperEl) {
+      const parentPostEl = this.wrapperEl.closest('.PostStream-item');
+      if (parentPostEl) {
+        try {
+          parentPostEl.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        } catch (e) {
+          // 一些旧浏览器不支持 behavior: 'smooth', fallback 到 instant
+          parentPostEl.scrollIntoView({ block: 'start' });
+        }
+      }
+    }
+  }
+
+  /**
    * Apply the visual change: render the current `this.replies`
    * array into the `<ul>` via direct DOM manipulation (creating
    * new `<li>` elements + mithril-rendering a NestedReply into
@@ -391,14 +468,35 @@ export default class NestedReplies extends Component {
 
   _applyButton() {
     if (!this.buttonEl) return;
-    // Show the "展示更多" button only if there are MORE replies to
-    // load than what we currently have visible. The condition is:
-    //   this.visibleCount < this.totalCount
-    // (i.e. we've shown fewer than the total). When we reach the
-    // end (this.visibleCount === this.totalCount), the button
-    // disappears.
+    // v0.1.0e.h (辉哥 16:59 拍板): "展示更多" 和 "收起" 互斥显示.
+    // 两个按钮是 NOT 同屏共存 — 任一时刻只有一个 visible.
+    //
+    // 规则:
+    //   - visibleCount === DEFAULT_PAGE_SIZE (3)  → 展示更多 visible / 收起 hidden
+    //     (default state, 跟 v0.1.0e.b 一样. 有 more 就显示 loadMore
+    //     按钮, 让用户能再加载)
+    //   - visibleCount > DEFAULT_PAGE_SIZE (展开后) → 展示更多 hidden / 收起 visible
+    //     (expanded state. 此时不管 hasMore=true/false, 都隐藏 loadMore,
+    //     因为 收起 接管了. 用户想看更多 → 先收起 → 再展示更多, 走
+    //     expand/collapse loop 模式)
+    //
+    // 为什么不用 "hasMore" 单独决定 (v0.1.0e.b 的逻辑): v0.1.0e.b
+    // 的 "loop until exhausted" UX 跟 v0.1.0e.h 的 "expand/collapse
+    // loop" UX 互斥. 辉哥 16:59 明确选了后者 — 用户展开一次看
+    // 13 条, 想看更多就先收起, 再展开 (cached 3→13 → 收起 → 3 →
+    // 再展开 → 13). 这种 UX 跟 小黑盒 评论区 / 微博 评论区 一样.
+    //
+    // Why this is safe: SOP 275 CSS-不-second-guess 模式, button
+    // visibility 完全由 JS 控. CSS 只是 layout 样式 (font-size /
+    // padding), 不写 visibility 规则.
+    const isExpanded = this.visibleCount > DEFAULT_PAGE_SIZE;
     const hasMore = this.visibleCount < this.totalCount;
-    this.buttonEl.style.display = hasMore ? '' : 'none';
+    // loadMore: only show in default state AND has more to load
+    this.buttonEl.style.display = (!isExpanded && hasMore) ? '' : 'none';
+    // collapse: only show when expanded
+    if (this.collapseEl) {
+      this.collapseEl.style.display = isExpanded ? '' : 'none';
+    }
   }
 
   view() {
@@ -458,6 +556,23 @@ export default class NestedReplies extends Component {
             onclick={() => this.loadMore()}
           >
             {app.translator.trans('ziven-post-comment.forum.post.load_more_replies')}
+          </Button>
+
+          {/* v0.1.0e.h (辉哥 16:59 拍板): "收起" 按钮. 只在
+              展开时 (visibleCount > DEFAULT_PAGE_SIZE) visible,
+              点 → visibleCount 回 3 + scroll 到主楼 PostStream-item
+              顶部. button visibility 走 _applyButton (SOP 275
+              CSS-不-second-guess), 永远 render 在 DOM 避免 mithril
+              重渲丢按钮 (SOP 268). 跟 loadMore 一样 style, 跟
+              _applyButton 同步 toggle, 互斥显示: 有 more → loadMore
+              visible / collapse hidden; expanded → loadMore hidden /
+              collapse visible. */}
+          <Button
+            className="Button Button--link NestedReplies-collapse"
+            style="display: none;"
+            onclick={() => this.collapse()}
+          >
+            {app.translator.trans('ziven-post-comment.forum.post.collapse_replies')}
           </Button>
 
           {/* v0.1.0e.a: removed the visible "Reply" button. The composer

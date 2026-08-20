@@ -210,6 +210,16 @@
   padding: 2px 6px;
 }
 
+// v0.1.0e.h (辉哥 16:59 拍板): "收起" 按钮 style 跟 "展示更多"
+// 一样 (Button Button--link 13px 2/6 padding). button visibility
+// 走 _applyButton() (visibleCount > DEFAULT_PAGE_SIZE), 跟
+// loadMore 互斥. CSS 这里不写 visibility, 完全中立 (SOP 275:
+// CSS 不 second-guess JS 状态机).
+.NestedReplies-collapse {
+  font-size: 13px;
+  padding: 2px 6px;
+}
+
 // v0.1.0d Bug 3 fix: when the post has no nested replies yet, the
 // wrapper is rendered in `--empty` state which collapsed the
 // controls row. v0.1.0e.b kept the same "no replies = no button"
