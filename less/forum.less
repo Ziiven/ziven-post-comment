@@ -211,12 +211,60 @@
 }
 
 // v0.1.0d Bug 3 fix: when the post has no nested replies yet, the
-// wrapper is rendered in `--empty` state which collapses the
-// controls row. v0.1.0e.b: 同样的逻辑 — `--empty` 时不显示
-// "展示更多" 按钮 (没回复可展示).
+// wrapper is rendered in `--empty` state which collapsed the
+// controls row. v0.1.0e.b kept the same "no replies = no button"
+// logic.
+//
+// v0.1.0e.g (辉哥 13:22 移动端亲测): the v0.1.0d/e.b `display:
+// none` on `.NestedReplies--empty .NestedReplies-controls` was
+// hiding the "展示更多" button PERMANENTLY on mobile (and desktop
+// too). v0.1.0e.b moved `_fetchReplies()` from oninit to oncreate
+// (SOP 268 pattern), but didn't update the view() className logic
+// — so the wrapper starts with `.NestedReplies--empty` (replies=[],
+// loading=false in oninit) and stays that way through the entire
+// fetch (because vendor `SubtreeRetainer` blocks mithril redraw).
+// With `--empty` always on, `.NestedReplies-controls { display:
+// none }` permanently hides the button, regardless of whether
+// `totalCount > 0`.
+//
+// Fix: drop the `display: none` rule. The button's visibility is
+// already controlled by `_applyButton()` which sets
+// `style.display = '' | 'none'` based on `visibleCount < totalCount`.
+// The CSS no longer needs to second-guess that — and SHOULDN'T,
+// because the JS state has the source of truth (it knows the
+// `repliesCount` from the parent's PostResourceFields
+// `countRelation`, and updates the button every time the
+// `data-visible-count` attribute changes).
+//
+// Why this is safe:
+//   - The button is wrapped in `.NestedReplies-controls` which
+//     has no other visual role (it's just a positioning
+//     container for the button). Removing `display: none` on
+//     `--empty` makes the wrapper visible, but the button
+//     itself stays `display: none` until `_applyButton` toggles
+//     it. The empty-state visual (no replies, no button) is
+//     preserved by the JS-level button visibility.
+//   - Without this fix, posts that DO have replies (e.g. 主楼 #2
+//     with 3+ children in /d/2) show no "展示更多" button
+//     because the wrapper class is stuck at `--empty` —
+//     breaking the entire NestedReplies UX for the most common
+//     case (主楼 with replies).
+//   - The button still has `style="display: none;"` in the
+//     initial mithril render (NestedReplies.jsx line ~436), and
+//     `_applyButton()` is called from `oncreate()` to compute
+//     the correct initial visibility based on `totalCount`. So
+//     the empty-state truly-empty (no replies at all) case
+//     still hides the button via JS — just not via CSS.
+//
+// Cross-session 沉淀 (SOP): v0.1.0e.b 引入的 "永远 hidden" bug
+// 藏了 e.b→e.c→e.d→e.f 4 个版本, 因为之前 Puppeteer T5 只验
+// `clicked=true`, 没验 button actual visible. v0.1.0e.g 修复 +
+// Puppeteer T5 加强 assert button computedDisplay !== 'none' &&
+// offsetParent === true.
 .NestedReplies--empty .NestedReplies-controls {
   margin-top: 0;
-  display: none;
+  // v0.1.0e.g: 删掉 `display: none`. button visibility 走
+  // `_applyButton()` (visibleCount < totalCount), CSS 不再 second-guess.
 }
 
 // ------------------------------------------------------------------
