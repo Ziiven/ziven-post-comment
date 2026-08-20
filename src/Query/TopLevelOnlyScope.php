@@ -15,7 +15,8 @@ use Illuminate\Database\Eloquent\Scope;
 
 /**
  * Global Eloquent scope that constrains Post queries to top-level
- * (主楼) posts only — i.e. `posts.parent_post_id IS NULL`.
+ * (主楼) posts only — i.e. `posts.parent_post_id IS NULL` AND
+ * `posts.type = 'comment'`.
  *
  * v0.1.0e.f (辉哥拍板 2026-08-20 08:18 — A1/B1/C2): this scope
  * fixes the Flarum 2.0 PostStream "mixed 20 posts" bug. Previously
@@ -26,6 +27,17 @@ use Illuminate\Database\Eloquent\Scope;
  * — no `whereNull('parent_post_id')` filter. Result: deep link
  * `/d/2/115` falls back to index=0 → `loadRange(0, 20)` → returns
  * mixed 20 (3 real 主楼 + 2 wrongly-judged-主楼 + 15 replies).
+ *
+ * v0.1.0e.i (辉哥拍板 2026-08-20 18:15): add `type = 'comment'`
+ * constraint to also filter out vendor/flarum-tags event posts
+ * (type='discussionTagged' for tag add/remove, type='discussionLocked',
+ * etc.) which were also being returned by PostIndex as if they
+ * were 主楼 (they have `parent_post_id IS NULL` because tag events
+ * are at the discussion level, not a reply). 辉哥原话: "从后台
+ * 接口处移除, 不是前端隐藏". So we extend the same global scope
+ * (the v0.1.0e.f pattern) to do the type filtering at the Eloquent
+ * layer too, instead of adding a vendor-API-level filter that would
+ * need a separate code path.
  *
  * Why a global scope (vs. overriding vendor `PostResource::scope`):
  *   1. `PostResource::scope` is a method, not a schema field — the
@@ -57,14 +69,26 @@ use Illuminate\Database\Eloquent\Scope;
  *     `?filter[ziven-post-comment:replies]=N` filter (see
  *     `RepliesFilter`), which calls `withoutGlobalScope()` first
  *     then applies the explicit `where('parent_post_id', '=', N)`.
+ *     `withoutGlobalScope` removes BOTH the whereNull and the new
+ *     where('type', 'comment') constraint, so replies can be
+ *     queried normally (and in practice replies are always
+ *     `type='comment'` anyway, since only `CommentPost::created`
+ *     events set `type='comment'`).
  *   - `PostIndex` index endpoint (the main fix): now returns
- *     ONLY top-level posts in mixed order. vendor `loadNext` /
+ *     ONLY top-level comment posts in mixed order. vendor `loadNext` /
  *     `loadPrevious` consume that and the 主楼 list is correct.
+ *     Tag event posts (`type='discussionTagged'`) and other vendor
+ *     event types are now correctly excluded from the stream.
  *   - `PostIndex` show endpoint: unaffected, since it loads a
  *     single post by id.
  *   - `PostIndex` create endpoint: unaffected, since it's a write.
  *   - `PostIndex` update endpoint: unaffected, since it operates
  *     on a single existing post.
+ *   - flarum/tags own logic (tag add/remove UI, save, etc.) is
+ *     unaffected — those write paths don't go through the global
+ *     scope composition with PostIndex. The event posts are still
+ *     CREATED in the DB; they're just no longer returned by the
+ *     main posts index endpoint (which is what 辉哥 wanted).
  *
  * @see /Applications/MAMP/htdocs/Flarum/vendor/flarum/core/src/Post/Post.php:112
  *      (vendor uses the same `addGlobalScope(new RegisteredTypesScope)`
@@ -80,5 +104,13 @@ class TopLevelOnlyScope implements Scope
         // the outer query joins the same table under a different
         // alias (e.g. vendor PostIndex's `whereVisibleTo` join).
         $builder->whereNull('posts.parent_post_id');
+
+        // v0.1.0e.i: also restrict to `type = 'comment'` to exclude
+        // vendor event posts (e.g. flarum/tags creates
+        // `type='discussionTagged'` posts at the discussion level
+        // — these have `parent_post_id IS NULL` so the v0.1.0e.f
+        // whereNull alone was not enough to filter them out of the
+        // main PostStream index).
+        $builder->where('posts.type', 'comment');
     }
 }
